@@ -99,16 +99,23 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
   RISCVABI::ABI ABI = Subtarget.getTargetABI();
   assert(ABI != RISCVABI::ABI_Unknown && "Improperly initialised target ABI");
 
-  if ((ABI == RISCVABI::ABI_ILP32F || ABI == RISCVABI::ABI_LP64F) &&
+  if ((ABI == RISCVABI::ABI_ILP32F || ABI == RISCVABI::ABI_LP64F || ABI == RISCVABI::ABI_LPS64F) &&
       !Subtarget.hasStdExtF()) {
     errs() << "Hard-float 'f' ABI can't be used for a target that "
                 "doesn't support the F instruction set extension (ignoring "
                           "target-abi)\n";
     ABI = Subtarget.is64Bit() ? RISCVABI::ABI_LP64 : RISCVABI::ABI_ILP32;
-  } else if ((ABI == RISCVABI::ABI_ILP32D || ABI == RISCVABI::ABI_LP64D) &&
+  } else if ((ABI == RISCVABI::ABI_ILP32D || ABI == RISCVABI::ABI_LP64D || ABI == RISCVABI::ABI_LPS64D) &&
              !Subtarget.hasStdExtD()) {
     errs() << "Hard-float 'd' ABI can't be used for a target that "
               "doesn't support the D instruction set extension (ignoring "
+              "target-abi)\n";
+    ABI = Subtarget.is64Bit() ? RISCVABI::ABI_LP64 : RISCVABI::ABI_ILP32;
+  } else if ((ABI == RISCVABI::ABI_LPS64 || ABI == RISCVABI::ABI_LPS64F ||
+              ABI == RISCVABI::ABI_LPS64D) &&
+             !Subtarget.hasVendorXSig()) {
+    errs() << "Sig ABIs can't be used for a target that "
+              "doesn't support the Sig extension (ignoring "
               "target-abi)\n";
     ABI = Subtarget.is64Bit() ? RISCVABI::ABI_LP64 : RISCVABI::ABI_ILP32;
   }
@@ -124,6 +131,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
   case RISCVABI::ABI_LP64:
   case RISCVABI::ABI_LP64F:
   case RISCVABI::ABI_LP64D:
+  case RISCVABI::ABI_LPS64:
+  case RISCVABI::ABI_LPS64F:
+  case RISCVABI::ABI_LPS64D:
     break;
   }
 

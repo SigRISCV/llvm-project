@@ -104,16 +104,19 @@ RISCVRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     return CSR_ILP32E_LP64E_SaveList;
   case RISCVABI::ABI_ILP32:
   case RISCVABI::ABI_LP64:
+  case RISCVABI::ABI_LPS64:
     if (HasVectorCSR)
       return CSR_ILP32_LP64_V_SaveList;
     return CSR_ILP32_LP64_SaveList;
   case RISCVABI::ABI_ILP32F:
   case RISCVABI::ABI_LP64F:
+  case RISCVABI::ABI_LPS64F:
     if (HasVectorCSR)
       return CSR_ILP32F_LP64F_V_SaveList;
     return CSR_ILP32F_LP64F_SaveList;
   case RISCVABI::ABI_ILP32D:
   case RISCVABI::ABI_LP64D:
+  case RISCVABI::ABI_LPS64D:
     if (HasVectorCSR)
       return CSR_ILP32D_LP64D_V_SaveList;
     return CSR_ILP32D_LP64D_SaveList;

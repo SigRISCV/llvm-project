@@ -376,13 +376,16 @@ bool llvm::CC_RISCV(unsigned ValNo, MVT ValVT, MVT LocVT,
   case RISCVABI::ABI_ILP32E:
   case RISCVABI::ABI_LP64:
   case RISCVABI::ABI_LP64E:
+  case RISCVABI::ABI_LPS64:
     break;
   case RISCVABI::ABI_ILP32F:
   case RISCVABI::ABI_LP64F:
+  case RISCVABI::ABI_LPS64F:
     UseGPRForF16_F32 = ArgFlags.isVarArg();
     break;
   case RISCVABI::ABI_ILP32D:
   case RISCVABI::ABI_LP64D:
+  case RISCVABI::ABI_LPS64D:
     UseGPRForF16_F32 = ArgFlags.isVarArg();
     UseGPRForF64 = ArgFlags.isVarArg();
     break;
