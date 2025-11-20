@@ -1138,6 +1138,13 @@ def HasStdExtZbbOrZbkbOrP
 // Vendor extensions
 //===----------------------------------------------------------------------===//
 
+// Sig Extensions
+def FeatureVendorXSig
+    : RISCVExperimentalExtension<0, 1, "Protect Pointer Integrity by Signature">;
+def HasVendorXSig : Predicate<"Subtarget->hasVendorXSig()">,
+                    AssemblerPredicate<(all_of FeatureVendorXSig),
+                                       "'Sig' (Protect Pointer Integrity by Signature)">;
+
 // Ventana Extensions
 
 def FeatureVendorXVentanaCondOps

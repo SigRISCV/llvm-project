@@ -566,3 +566,17 @@ foreach i = 0 - 3 in {
   def : SysReg<"qc.mwpendaddr" # i,   !add(0x7D4, i)>;
 }
 } // FeatureVendorXqciint, isRV32Only
+
+let FeaturesRequired = [{ {RISCV::FeatureVendorXSig} }] in {
+//===--------------------------
+// Machine Key Register
+//===--------------------------
+def : SysReg<"mkeyl", 0x7F0>;
+def : SysReg<"mkeyh", 0x7F1>;
+
+//===--------------------------
+// Supervisor Key Register
+//===--------------------------
+def : SysReg<"skeyl", 0x5F0>;
+def : SysReg<"skeyh", 0x5F1>;
+}
