@@ -216,7 +216,8 @@ public:
       return true;
     }
 
-    if (Name == "lp64" || Name == "lp64f" || Name == "lp64d") {
+    if (Name == "lp64" || Name == "lp64f" || Name == "lp64d" || Name == "lps64" ||
+        Name == "lps64f" || Name == "lps64d") {
       ABI = Name;
       return true;
     }
