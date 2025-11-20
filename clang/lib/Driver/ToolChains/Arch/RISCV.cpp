@@ -49,6 +49,14 @@ static bool getArchFeatures(const Driver &D, StringRef Arch,
   return true;
 }
 
+static bool isSigModeABIName(StringRef ABI) {
+  return llvm::StringSwitch<bool>(ABI)
+      .Case("lps64", true)
+      .Case("lps64f", true)
+      .Case("lps64d", true)
+      .Default(false);
+}
+
 static bool isValidRISCVCPU(const Driver &D, const Arg *A,
                             const llvm::Triple &Triple, StringRef Mcpu) {
   bool Is64Bit = Triple.isRISCV64();
@@ -140,6 +148,18 @@ void riscv::getRISCVTargetFeatures(const Driver &D, const llvm::Triple &Triple,
           << A->getAsString(Args);
   } else {
     Features.push_back("-relax");
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ)) {
+    bool IsSigMode = isSigModeABIName(A->getValue());
+    if (IsSigMode) {
+      if (llvm::find(Features, "+experimental-xsig") == Features.end()) {
+        D.Diag(clang::diag::err_drv_invalid_msigmode_abi) << A->getValue()
+          << "Sig Mode ABI requires xsig extension to be specified";
+        return;
+      }
+      Features.push_back("+sig-mode");
+    }
   }
 
   // If -mstrict-align, -mno-strict-align, -mscalar-strict-align, or

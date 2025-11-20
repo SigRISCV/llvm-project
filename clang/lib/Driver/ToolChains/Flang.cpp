@@ -355,7 +355,8 @@ void Flang::AddRISCVTargetArgs(const ArgList &Args,
   const llvm::Triple &Triple = getToolChain().getTriple();
 
   StringRef ABIName = riscv::getRISCVABI(Args, Triple);
-  if (ABIName == "lp64" || ABIName == "lp64f" || ABIName == "lp64d")
+  if (ABIName == "lp64" || ABIName == "lp64f" || ABIName == "lp64d" ||
+      ABIName == "lps64" || ABIName == "lps64f" || ABIName == "lps64d")
     CmdArgs.push_back(Args.MakeArgString("-mabi=" + ABIName));
   else
     D.Diag(diag::err_drv_unsupported_option_argument) << "-mabi=" << ABIName;
