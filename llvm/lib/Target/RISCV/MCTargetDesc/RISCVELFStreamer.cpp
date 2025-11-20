@@ -97,6 +97,7 @@ void RISCVTargetELFStreamer::finish() {
   switch (ABI) {
   case RISCVABI::ABI_ILP32:
   case RISCVABI::ABI_LP64:
+  case RISCVABI::ABI_LPS64:
     break;
   case RISCVABI::ABI_ILP32F:
   case RISCVABI::ABI_LP64F:
