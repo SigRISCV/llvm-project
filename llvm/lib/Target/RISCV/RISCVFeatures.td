@@ -1144,7 +1144,6 @@ def FeatureVendorXSig
 def HasVendorXSig : Predicate<"Subtarget->hasVendorXSig()">,
                     AssemblerPredicate<(all_of FeatureVendorXSig),
                                        "'Sig' (Protect Pointer Integrity by Signature)">;
-
 // Ventana Extensions
 
 def FeatureVendorXVentanaCondOps
@@ -1746,6 +1745,15 @@ def HasVendorXSMTVDot
 //===----------------------------------------------------------------------===//
 // LLVM specific features and extensions
 //===----------------------------------------------------------------------===//
+
+def FeatureSigMode
+    : SubtargetFeature<"sig-mode", "IsSigCapMode", "true", "Enable Sig Mode">;
+def IsSigMode : Predicate<"SubTarget->isSigMode()">,
+                AssemblerPredicate<(all_of FeatureSigMode),
+                                   "Enable Sig Mode">;
+def NotSigMode : Predicate<"!SubTarget->isSigMode()">,
+                   AssemblerPredicate<(all_of (not FeatureSigMode)),
+                                    "Disable Sig Mode">;
 
 // Feature32Bit exists to mark CPUs that support RV32 to distinguish them from
 // tuning CPU names.
