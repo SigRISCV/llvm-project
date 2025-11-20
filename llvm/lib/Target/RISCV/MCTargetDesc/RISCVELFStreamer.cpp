@@ -100,10 +100,12 @@ void RISCVTargetELFStreamer::finish() {
     break;
   case RISCVABI::ABI_ILP32F:
   case RISCVABI::ABI_LP64F:
+  case RISCVABI::ABI_LPS64F:
     EFlags |= ELF::EF_RISCV_FLOAT_ABI_SINGLE;
     break;
   case RISCVABI::ABI_ILP32D:
   case RISCVABI::ABI_LP64D:
+  case RISCVABI::ABI_LPS64D:
     EFlags |= ELF::EF_RISCV_FLOAT_ABI_DOUBLE;
     break;
   case RISCVABI::ABI_ILP32E:
@@ -112,6 +114,16 @@ void RISCVTargetELFStreamer::finish() {
     break;
   case RISCVABI::ABI_Unknown:
     llvm_unreachable("Improperly initialised target ABI");
+  }
+
+  switch (ABI) {
+  case llvm::RISCVABI::ABI_LPS64:
+  case llvm::RISCVABI::ABI_LPS64F:
+  case llvm::RISCVABI::ABI_LPS64D:
+    EFlags |= ELF::EF_RISCV_SIG_MODE;
+    break;
+  default:
+    break;
   }
 
   W.setELFHeaderEFlags(EFlags);

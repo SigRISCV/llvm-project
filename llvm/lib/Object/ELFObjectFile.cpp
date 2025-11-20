@@ -376,6 +376,11 @@ Expected<SubtargetFeatures> ELFObjectFileBase::getRISCVFeatures() const {
     Features.AddFeature("zca");
   }
 
+  if (PlatformFlags & ELF::EF_RISCV_SIG_MODE) {
+    Features.AddFeature("experimental-xsig");
+    Features.AddFeature("sig-mode");
+  }
+
   RISCVAttributeParser Attributes;
   if (Error E = getBuildAttributes(Attributes)) {
     return std::move(E);
