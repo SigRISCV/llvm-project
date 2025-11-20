@@ -58,6 +58,7 @@ ABI computeTargetABI(const Triple &TT, const FeatureBitset &FeatureBits,
   auto TargetABI = getTargetABI(ABIName);
   bool IsRV64 = TT.isArch64Bit();
   bool IsRVE = FeatureBits[RISCV::FeatureStdExtE];
+  bool IsRVSig = FeatureBits[RISCV::FeatureVendorXSig];
 
   if (!ABIName.empty() && TargetABI == ABI_Unknown) {
     errs()
@@ -69,6 +70,10 @@ ABI computeTargetABI(const Triple &TT, const FeatureBitset &FeatureBits,
     TargetABI = ABI_Unknown;
   } else if (ABIName.starts_with("lp64") && !IsRV64) {
     errs() << "64-bit ABIs are not supported for 32-bit targets (ignoring "
+              "target-abi)\n";
+    TargetABI = ABI_Unknown;
+  } else if (ABIName.starts_with("lps64") && !IsRVSig) { 
+    errs() << "64-bit Sig ABIs are not supported for arch without Sig extension (ignoring "
               "target-abi)\n";
     TargetABI = ABI_Unknown;
   } else if (!IsRV64 && IsRVE && TargetABI != ABI_ILP32E &&
@@ -110,6 +115,9 @@ ABI getTargetABI(StringRef ABIName) {
                        .Case("lp64f", ABI_LP64F)
                        .Case("lp64d", ABI_LP64D)
                        .Case("lp64e", ABI_LP64E)
+                       .Case("lps64", ABI_LPS64)
+                       .Case("lps64f", ABI_LPS64F)
+                       .Case("lps64d", ABI_LPS64D)
                        .Default(ABI_Unknown);
   return TargetABI;
 }
