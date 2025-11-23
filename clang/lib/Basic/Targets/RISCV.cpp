@@ -402,6 +402,7 @@ bool RISCVTargetInfo::hasFeature(StringRef Feature) const {
                     .Case("32bit", !Is64Bit)
                     .Case("64bit", Is64Bit)
                     .Case("experimental", HasExperimental)
+                    .Case("sig-mode", HasSigMode)
                     .Default(std::nullopt);
   if (Result)
     return *Result;

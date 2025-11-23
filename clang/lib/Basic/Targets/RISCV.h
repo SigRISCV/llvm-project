@@ -28,6 +28,7 @@ class RISCVTargetInfo : public TargetInfo {
 protected:
   std::string ABI, CPU;
   std::unique_ptr<llvm::RISCVISAInfo> ISAInfo;
+  bool HasSigMode = false;
 
 private:
   bool FastScalarUnalignedAccess;
@@ -117,6 +118,7 @@ public:
     return false;
   }
 
+  bool isSigModeSupported() const override { return HasSigMode; }
   bool isValidCPUName(StringRef Name) const override;
   void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
   bool isValidTuneCPUName(StringRef Name) const override;

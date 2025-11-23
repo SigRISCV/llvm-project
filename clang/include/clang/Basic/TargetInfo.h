@@ -1659,6 +1659,11 @@ public:
             getTriple().getArch() == llvm::Triple::aarch64);
   }
 
+  /// Where the target supports sig mode
+  virtual bool isSigModeSupported() const {
+    return false;
+  }
+
   /// Return true if {|} are normal characters in the asm string.
   ///
   /// If this returns false (the default), then {abc|xyz} is syntax
