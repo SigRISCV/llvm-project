@@ -1487,6 +1487,7 @@ bool Parser::isValidAfterTypeSpecifier(bool CouldBeBitfield) {
   case tok::kw_const:       // struct foo {...} const     x;
   case tok::kw_volatile:    // struct foo {...} volatile  x;
   case tok::kw_restrict:    // struct foo {...} restrict  x;
+  case tok::kw___raw:       // struct foo {...} __raw     x;
   case tok::kw__Atomic:     // struct foo {...} _Atomic   x;
   case tok::kw___unaligned: // struct foo {...} __unaligned *x;
   // Function specifiers

@@ -2326,6 +2326,7 @@ private:
   void ParseOpenCLQualifiers(ParsedAttributes &Attrs);
   void ParseNullabilityTypeSpecifiers(ParsedAttributes &attrs);
   void ParseCUDAFunctionAttributes(ParsedAttributes &attrs);
+  void ParseRawQualifiers(ParsedAttributes &attrs);
   bool isHLSLQualifier(const Token &Tok) const;
   void ParseHLSLQualifiers(ParsedAttributes &Attrs);
 
