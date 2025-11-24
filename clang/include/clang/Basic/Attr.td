@@ -1445,6 +1445,11 @@ def Const : InheritableAttr {
   let SimpleHandler = 1;
 }
 
+def Raw : TypeAttr {
+  let Spellings = [GCC<"__raw">];
+  let Documentation = [Undocumented];
+}
+
 def ConstInit : InheritableAttr {
   // This attribute does not have a C [[]] spelling because it requires the
   // CPlusPlus language option.

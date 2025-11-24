@@ -779,7 +779,7 @@ Parser::TPResult Parser::TryParsePtrOperatorSeq() {
       while (Tok.isOneOf(tok::kw_const, tok::kw_volatile, tok::kw_restrict,
                          tok::kw__Nonnull, tok::kw__Nullable,
                          tok::kw__Nullable_result, tok::kw__Null_unspecified,
-                         tok::kw__Atomic))
+                         tok::kw__Atomic, tok::kw___raw))
         ConsumeToken();
     } else {
       return TPResult::True;
@@ -1018,7 +1018,7 @@ Parser::isCXXDeclarationSpecifier(ImplicitTypenameContext AllowImplicitTypename,
                          // user, so let this be diagnosed nicely later. We
                          // cannot handle references here, as `C<int> & Other`
                          // and `C<int> && Other` are both legal.
-                         tok::kw_const, tok::kw_volatile, tok::kw_restrict) ||
+                         tok::kw_const, tok::kw_volatile, tok::kw_restrict, tok::kw___raw) ||
             // While `C<int> && Other` is legal, doing so while not specifying a
             // template argument is NOT, so see if we can fix up in that case at
             // minimum. Concepts require at least 1 template parameter, so we
@@ -1199,6 +1199,7 @@ Parser::isCXXDeclarationSpecifier(ImplicitTypenameContext AllowImplicitTypename,
     // cv-qualifier
   case tok::kw_const:
   case tok::kw_volatile:
+  case tok::kw___raw:
     return TPResult::True;
 
     // OpenCL address space qualifiers
