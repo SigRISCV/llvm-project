@@ -931,7 +931,15 @@ void RISCVAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   if (!Value)
     return; // Doesn't change encoding.
   // Apply any target-specific value adjustments.
-  Value = adjustFixupValue(Fixup, Value, Ctx);
+  // SigRISCV: if fixup_riscv_12_i is used for PC-relative (mapped to R_RISCV_BRANCH), we need I-type encoding instead of B-type.
+  if (Kind == RISCV::fixup_riscv_12_i && Info.TargetOffset == 20 && Info.TargetSize == 12) {
+    // I-type PC-relative: 12-bit immediate in bits 31-20
+    if (!isInt<12>(Value))
+      Ctx.reportError(Fixup.getLoc(), "fixup value out of range");
+    Value = Value & 0xfff;
+  } else {
+    Value = adjustFixupValue(Fixup, Value, Ctx);
+  }
 
   // Shift the value into position.
   Value <<= Info.TargetOffset;

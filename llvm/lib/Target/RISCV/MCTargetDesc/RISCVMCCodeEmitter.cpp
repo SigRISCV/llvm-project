@@ -125,8 +125,7 @@ MCCodeEmitter *llvm::createRISCVMCCodeEmitter(const MCInstrInfo &MCII,
 }
 
 static void addFixup(SmallVectorImpl<MCFixup> &Fixups, uint32_t Offset,
-                     const MCExpr *Value, uint16_t Kind) {
-  bool PCRel = false;
+                     const MCExpr *Value, uint16_t Kind, bool PCRel = false) {
   switch (Kind) {
   case ELF::R_RISCV_CALL_PLT:
   case RISCV::fixup_riscv_pcrel_hi20:
@@ -142,6 +141,12 @@ static void addFixup(SmallVectorImpl<MCFixup> &Fixups, uint32_t Offset,
   case RISCV::fixup_riscv_qc_e_call_plt:
   case RISCV::fixup_riscv_nds_branch_10:
     PCRel = true;
+    break;
+  case RISCV::fixup_riscv_12_i:
+    break;
+  default:
+    PCRel = false;
+    break;
   }
   Fixups.push_back(MCFixup::create(Offset, Value, Kind, PCRel));
 }
@@ -708,7 +713,14 @@ uint64_t RISCVMCCodeEmitter::getImmOpValue(const MCInst &MI, unsigned OpNo,
 
   assert(FixupKind != RISCV::fixup_riscv_invalid && "Unhandled expression!");
 
-  addFixup(Fixups, 0, Expr, FixupKind);
+  // Check if this is a PC-relative I-type fixup (e.g., switchs instruction)
+  bool IsPCRel = false;
+  if (FixupKind == RISCV::fixup_riscv_12_i && OpNo < Desc.getNumOperands() &&
+      Desc.operands()[OpNo].OperandType == MCOI::OPERAND_PCREL) {
+    IsPCRel = true;
+  }
+
+  addFixup(Fixups, 0, Expr, FixupKind, IsPCRel);
   // If linker relaxation is enabled and supported by this relocation, set a bit
   // so that the assembler knows the size of the instruction is not fixed/known,
   // and the relocation will need a R_RISCV_RELAX relocation.
