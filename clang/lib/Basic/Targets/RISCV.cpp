@@ -444,6 +444,10 @@ bool RISCVTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
         << "ILP32E cannot be used with the D ISA extension";
     return false;
   }
+  
+  if ((ABI == "lsp64" || ABI == "lps64f" || ABI == "lps64d") && ISAInfo->hasExtension("experimental-xsig")) {
+    HasSigMode = true;
+  }
   return true;
 }
 
