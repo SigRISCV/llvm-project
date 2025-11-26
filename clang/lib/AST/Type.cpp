@@ -27,6 +27,8 @@
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
+#include "clang/AST/TypeBase.h"
+#include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeVisitor.h"
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/ExceptionSpecificationType.h"
@@ -35,6 +37,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/Linkage.h"
 #include "clang/Basic/Specifiers.h"
+#include "clang/Basic/SyncScope.h"
 #include "clang/Basic/TargetCXXABI.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/Visibility.h"
@@ -44,6 +47,7 @@
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
@@ -482,6 +486,34 @@ const Type *Type::getArrayElementTypeNoTypeQual() const {
   return cast<ArrayType>(getUnqualifiedDesugaredType())
       ->getElementType()
       .getTypePtr();
+}
+
+bool Type::isContainPointer() const {
+  bool flag = false;
+  llvm::dbgs() << "isbuiltintype:" << isBuiltinType() << "\n";
+  llvm::dbgs() << "ispointertype:" << isPointerType() << "\n";
+  llvm::dbgs() << "isarraytype:" << isArrayType() << "\n";
+  llvm::dbgs() << "isunion_structtype:" << isRecordType() << isUnionType() << isStructuralType() << "\n";
+  if(isBuiltinType()) {
+    flag = false;
+  } else if (isPointerType()) {
+    flag = true;
+  } else if (isArrayType()) {
+    llvm::dbgs() << "array_type:" << getAsArrayTypeUnsafe() << "\n";
+    llvm::dbgs() << "array type:" << getAsArrayTypeUnsafe()->getElementType().getAsString() <<"\n";
+    const Type* type = getAsArrayTypeUnsafe()->getElementType().getTypePtr();
+    flag = type->isContainPointer();
+  } else if (isRecordType()) {
+    if (RecordDecl *RD = getAsRecordDecl()) {
+      for (FieldDecl *FD : RD->fields()) {
+          if (FD->getType()->isContainPointer()) {
+              flag = true;
+              break;
+          }
+      }
+    }
+  }
+  return flag;
 }
 
 /// getDesugaredType - Return the specified type with any "sugar" removed from

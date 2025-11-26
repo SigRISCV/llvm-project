@@ -454,6 +454,19 @@ public:
   // Serialize these qualifiers into an opaque representation.
   uint64_t getAsOpaqueValue() const { return Mask; }
 
+  bool hasRaw() const { return Mask & RawMask; }
+  bool hasOnlyRaw() const { return Mask == RawMask; }
+  void removeRaw() { Mask &= ~RawMask; }
+  void addRaw() { Mask |= RawMask; }
+  Qualifiers withRaw() const {
+    Qualifiers Qs = *this;
+    Qs.addRaw();
+    return Qs;
+  }
+  void setRaw(bool flag) {
+    Mask = (Mask & ~RawMask) | (flag ? RawMask : 0);
+  }
+
   bool hasConst() const { return Mask & Const; }
   bool hasOnlyConst() const { return Mask == Const; }
   void removeConst() { Mask &= ~Const; }
@@ -734,6 +747,7 @@ public:
            getPointerAuth() == other.getPointerAuth() &&
            // ObjC lifetime qualifiers must match exactly.
            getObjCLifetime() == other.getObjCLifetime() &&
+           (hasRaw() == other.hasRaw()) &&
            // CVR qualifiers may subset.
            (((Mask & CVRMask) | (other.Mask & CVRMask)) == (Mask & CVRMask)) &&
            // U qualifier may superset.
@@ -804,14 +818,17 @@ public:
   void Profile(llvm::FoldingSetNodeID &ID) const { ID.AddInteger(Mask); }
 
 private:
-  // bits:     |0 1 2|3|4 .. 5|6  ..  8|9   ...   31|32 ... 63|
-  //           |C R V|U|GCAttr|Lifetime|AddressSpace| PtrAuth |
+  // bits:     |0 1 2|3|4 .. 5|6  ..  8|9   ...   31|32 ... 62|63|
+  //           |C R V|U|GCAttr|Lifetime|AddressSpace| PtrAuth | R|
   uint64_t Mask = 0;
   static_assert(sizeof(PointerAuthQualifier) == sizeof(uint32_t),
                 "PointerAuthQualifier must be 32 bits");
 
-  static constexpr uint64_t PtrAuthShift = 32;
-  static constexpr uint64_t PtrAuthMask = UINT64_C(0xffffffff) << PtrAuthShift;
+  static constexpr uint64_t RawShift = 63;
+  static constexpr uint64_t RawMask = UINT64_C(1) << RawShift;
+
+  static constexpr uint64_t PtrAuthShift = 31;
+  static constexpr uint64_t PtrAuthMask = UINT64_C(0x7fffffff) << PtrAuthShift;
 
   static constexpr uint64_t UMask = 0x8;
   static constexpr uint64_t UShift = 3;
@@ -820,7 +837,7 @@ private:
   static constexpr uint64_t LifetimeMask = 0x1C0;
   static constexpr uint64_t LifetimeShift = 6;
   static constexpr uint64_t AddressSpaceMask =
-      ~(CVRMask | UMask | GCAttrMask | LifetimeMask | PtrAuthMask);
+      ~(CVRMask | UMask | GCAttrMask | LifetimeMask | PtrAuthMask | RawMask);
   static constexpr uint64_t AddressSpaceShift = 9;
 };
 
@@ -1057,6 +1074,8 @@ public:
 
   /// Determine whether this type is volatile-qualified.
   bool isVolatileQualified() const;
+
+  bool isRawQualified() const;
 
   /// Determine whether this particular QualType instance has any
   /// qualifiers, without looking through any typedefs that might add
@@ -2596,6 +2615,7 @@ public:
 
   // Type Predicates: Check to see if this type is structurally the specified
   // type, ignoring typedefs and qualifiers.
+  bool isContainPointer() const;
   bool isFunctionType() const;
   bool isFunctionNoProtoType() const { return getAs<FunctionNoProtoType>(); }
   bool isFunctionProtoType() const { return getAs<FunctionProtoType>(); }
@@ -8346,6 +8366,10 @@ inline bool QualType::isCanonicalAsParam() const {
 
   return !isa<FunctionType>(T) &&
          (!isa<ArrayType>(T) || isa<ArrayParameterType>(T));
+}
+
+inline bool QualType::isRawQualified() const {
+  return getQualifiers().hasRaw();
 }
 
 inline bool QualType::isConstQualified() const {

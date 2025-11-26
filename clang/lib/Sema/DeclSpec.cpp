@@ -422,6 +422,8 @@ void DeclSpec::forEachCVRUQualifier(
     Handle(TQ_restrict, "restrict", TQ_restrictLoc);
   if (TypeQualifiers & TQ_unaligned)
     Handle(TQ_unaligned, "unaligned", TQ_unalignedLoc);
+  if (TypeQualifiers & TQ_raw)
+    Handle(TQ_raw, "__raw", TQ_rawLoc);
 }
 
 void DeclSpec::forEachQualifier(
@@ -612,6 +614,7 @@ const char *DeclSpec::getSpecifierName(TQ T) {
   case DeclSpec::TQ_volatile:    return "volatile";
   case DeclSpec::TQ_atomic:      return "_Atomic";
   case DeclSpec::TQ_unaligned:   return "__unaligned";
+  case DeclSpec::TQ_raw:         return "__raw";
   }
   llvm_unreachable("Unknown typespec!");
 }
@@ -998,6 +1001,7 @@ bool DeclSpec::SetTypeQual(TQ T, SourceLocation Loc) {
   case TQ_volatile: TQ_volatileLoc = Loc; return false;
   case TQ_unaligned: TQ_unalignedLoc = Loc; return false;
   case TQ_atomic:   TQ_atomicLoc = Loc; return false;
+  case TQ_raw:   TQ_rawLoc = Loc; return false;
   }
 
   llvm_unreachable("Unknown type qualifier!");
