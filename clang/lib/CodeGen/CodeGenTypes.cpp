@@ -27,6 +27,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/Debug.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -614,7 +615,19 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
   case Type::Pointer: {
     const PointerType *PTy = cast<PointerType>(Ty);
     QualType ETy = PTy->getPointeeType();
-    unsigned AS = getTargetAddressSpace(ETy);
+    unsigned AS = 0;
+    AS = getTargetAddressSpace(ETy);
+    llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
+    if(Context.getTargetInfo().isSigModeSupported()){
+      llvm::dbgs() << "it is sigmode\n";
+      if(!ETy.isRawQualified()){
+        llvm::dbgs() << "it is not raw\n";
+        if(!ETy.hasAddressSpace()){
+          AS = 200;
+          llvm::dbgs() << "AS of type " << ETy.getAsString() << " in sigmode is " << AS << "\n";
+        }
+      }
+    }
     ResultType = llvm::PointerType::get(getLLVMContext(), AS);
     break;
   }
