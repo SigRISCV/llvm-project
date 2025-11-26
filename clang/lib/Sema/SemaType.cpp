@@ -1666,18 +1666,14 @@ QualType Sema::BuildQualifiedType(QualType T, SourceLocation Loc,
     if (T.isNull())
       return T;
     Split.Quals.addCVRQualifiers(CVR);
-    if(T->isContainPointer()){
-      Split.Quals.setRaw(CVRAU & DeclSpec::TQ_raw);
-    }
+    Split.Quals.setRaw(CVRAU & DeclSpec::TQ_raw);
 
     return BuildQualifiedType(T, Loc, Split.Quals);
   }
 
   Qualifiers Q = Qualifiers::fromCVRMask(CVR);
   Q.setUnaligned(CVRAU & DeclSpec::TQ_unaligned);
-  if(T->isContainPointer()){
-    Q.setRaw(CVRAU & DeclSpec::TQ_raw);
-  }
+  Q.setRaw(CVRAU & DeclSpec::TQ_raw);
   return BuildQualifiedType(T, Loc, Q, DS);
 }
 
