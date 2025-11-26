@@ -4733,7 +4733,6 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
       }
 
       if(DeclType.Ptr.TypeQuals & DeclSpec::TQ_raw){
-        llvm::dbgs() << "the type of pointer is " << T.getAsString() << " before containspointer\n";
         if(T.getTypePtr()->isContainPointer() && !T.isRawQualified()){
           S.Diag(D.getIdentifierLoc(), diag::err_pointee_need_raw_attr) << T;
         }

@@ -2701,6 +2701,9 @@ bool Qualifiers::isEmptyWhenPrinted(const PrintingPolicy &Policy) const {
       PointerAuth && !PointerAuth.isEmptyWhenPrinted(Policy))
     return false;
 
+  if (hasRaw())
+    return false;
+
   return true;
 }
 
