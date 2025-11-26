@@ -1445,8 +1445,8 @@ def Const : InheritableAttr {
   let SimpleHandler = 1;
 }
 
-def Raw : TypeAttr {
-  let Spellings = [GCC<"__raw">];
+def Raw : InheritableAttr {
+  let Spellings = [Clang<"__raw">, CustomKeyword<"__raw">];
   let Documentation = [Undocumented];
 }
 
