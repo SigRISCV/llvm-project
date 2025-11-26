@@ -2774,6 +2774,12 @@ void Qualifiers::print(raw_ostream &OS, const PrintingPolicy& Policy,
     OS << "__unaligned";
     addSpace = true;
   }
+  if (hasRaw()) {
+    if (addSpace)
+      OS << ' ';
+    OS << "__raw";
+    addSpace = true;
+  }
   auto ASStr = getAddrSpaceAsString(getAddressSpace());
   if (!ASStr.empty()) {
     if (addSpace)
