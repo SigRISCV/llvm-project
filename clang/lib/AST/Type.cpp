@@ -490,17 +490,11 @@ const Type *Type::getArrayElementTypeNoTypeQual() const {
 
 bool Type::isContainPointer() const {
   bool flag = false;
-  llvm::dbgs() << "isbuiltintype:" << isBuiltinType() << "\n";
-  llvm::dbgs() << "ispointertype:" << isPointerType() << "\n";
-  llvm::dbgs() << "isarraytype:" << isArrayType() << "\n";
-  llvm::dbgs() << "isunion_structtype:" << isRecordType() << isUnionType() << isStructuralType() << "\n";
   if(isBuiltinType()) {
     flag = false;
   } else if (isPointerType()) {
     flag = true;
   } else if (isArrayType()) {
-    llvm::dbgs() << "array_type:" << getAsArrayTypeUnsafe() << "\n";
-    llvm::dbgs() << "array type:" << getAsArrayTypeUnsafe()->getElementType().getAsString() <<"\n";
     const Type* type = getAsArrayTypeUnsafe()->getElementType().getTypePtr();
     flag = type->isContainPointer();
   } else if (isRecordType()) {
@@ -513,6 +507,7 @@ bool Type::isContainPointer() const {
       }
     }
   }
+  llvm::dbgs() << "isContainPointer:" << flag << "\n";
   return flag;
 }
 
