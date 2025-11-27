@@ -85,7 +85,7 @@ class CodeGenTypes {
   /// This map keeps cache of llvm::Types and maps clang::Type to
   /// corresponding llvm::Type.
   llvm::DenseMap<const Type *, llvm::Type *> TypeCache;
-  llvm::DenseMap<const Type *, llvm::DenseMap<uint64_t, llvm::Type *>> PointerTypeCache;
+  llvm::DenseMap<const Type *, llvm::DenseMap<unsigned int, llvm::Type *>> PointerTypeCache;
 
   llvm::DenseMap<const Type *, llvm::Type *> RecordsWithOpaqueMemberPointers;
 

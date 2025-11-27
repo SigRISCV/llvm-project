@@ -2665,7 +2665,7 @@ static void checkExtParameterInfos(Sema &S, ArrayRef<QualType> paramTypes,
 QualType Sema::BuildFunctionType(QualType T,
                                  MutableArrayRef<QualType> ParamTypes,
                                  SourceLocation Loc, DeclarationName Entity,
-                                 const FunctionProtoType::ExtProtoInfo &EPI) {
+                                 const FunctionProtoType::ExtProtoInfo &EPI) {                               
   bool Invalid = false;
 
   Invalid |= CheckFunctionReturnType(T, Loc);
@@ -4729,12 +4729,15 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
       }
 
       if(DeclType.Ptr.TypeQuals & DeclSpec::TQ_raw){
-        if(T.getTypePtr()->isContainPointer() && !T.isRawQualified()){
+        if (T.getTypePtr()->isContainPointer() && !T.isRawQualified()) {
           S.Diag(D.getIdentifierLoc(), diag::err_pointee_need_raw_attr) << T;
         }
       }
 
       T = S.BuildPointerType(T, DeclType.Loc, Name);
+      if (DeclType.Ptr.TypeQuals & DeclSpec::TQ_raw) {
+        T = S.Context.getRawPointerType(T->getAs<PointerType>()->getPointeeType());
+      }
       if (DeclType.Ptr.TypeQuals)
         T = S.BuildQualifiedType(T, DeclType.Loc, DeclType.Ptr.TypeQuals);
       llvm::dbgs() << "the type of pointer is " << T.getAsString() << "\n";
