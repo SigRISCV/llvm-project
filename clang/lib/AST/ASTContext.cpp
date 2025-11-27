@@ -3870,7 +3870,7 @@ QualType ASTContext::getRawPointerType(QualType T) const {
   // so fill in the canonical type field.
   QualType Canonical;
   if (!T.isCanonical()) {
-    Canonical = getPointerType(getCanonicalType(T));
+    Canonical = getRawPointerType(getCanonicalType(T));
 
     // Get the new insert position for the node we care about.
     PointerType *NewIP = RawPointerTypes.FindNodeOrInsertPos(ID, InsertPos);
