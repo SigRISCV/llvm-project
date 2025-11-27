@@ -3349,6 +3349,7 @@ class PointerType : public Type, public llvm::FoldingSetNode {
   friend class ASTContext; // ASTContext creates these.
 
   QualType PointeeType;
+  bool Raw = false;
 
   PointerType(QualType Pointee, QualType CanonicalPtr)
       : Type(Pointer, CanonicalPtr, Pointee->getDependence()),
@@ -3356,6 +3357,8 @@ class PointerType : public Type, public llvm::FoldingSetNode {
 
 public:
   QualType getPointeeType() const { return PointeeType; }
+  bool getRaw() const { return Raw; }
+  void setRaw(bool isRaw) { Raw = isRaw; }
 
   bool isSugared() const { return false; }
   QualType desugar() const { return QualType(this, 0); }

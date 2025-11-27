@@ -3856,6 +3856,33 @@ QualType ASTContext::getPointerType(QualType T) const {
   return QualType(New, 0);
 }
 
+QualType ASTContext::getRawPointerType(QualType T) const {
+  // Unique pointers, to guarantee there is only one pointer of a particular
+  // structure.
+  llvm::FoldingSetNodeID ID;
+  PointerType::Profile(ID, T);
+
+  void *InsertPos = nullptr;
+  if (PointerType *PT = RawPointerTypes.FindNodeOrInsertPos(ID, InsertPos))
+    return QualType(PT, 0);
+
+  // If the pointee type isn't canonical, this won't be a canonical type either,
+  // so fill in the canonical type field.
+  QualType Canonical;
+  if (!T.isCanonical()) {
+    Canonical = getPointerType(getCanonicalType(T));
+
+    // Get the new insert position for the node we care about.
+    PointerType *NewIP = PointerTypes.FindNodeOrInsertPos(ID, InsertPos);
+    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+  }
+  auto *New = new (*this, alignof(PointerType)) PointerType(T, Canonical);
+  New->setRaw(true);
+  Types.push_back(New);
+  PointerTypes.InsertNode(New, InsertPos);
+  return QualType(New, 0);
+}
+
 QualType ASTContext::getAdjustedType(QualType Orig, QualType New) const {
   llvm::FoldingSetNodeID ID;
   AdjustedType::Profile(ID, Orig, New);
