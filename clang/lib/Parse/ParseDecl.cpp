@@ -4505,8 +4505,10 @@ void Parser::ParseDeclarationSpecifiers(
       break;
     
     case tok::kw___raw:
-      isInvalid = DS.SetTypeQual(DeclSpec::TQ_raw, Loc, PrevSpec, DiagID,
+      if (getTargetInfo().isSigModeSupported()) {
+        isInvalid = DS.SetTypeQual(DeclSpec::TQ_raw, Loc, PrevSpec, DiagID,
                                  getLangOpts());
+      }
       break;
 
     // C++ typename-specifier:
@@ -6190,8 +6192,10 @@ void Parser::ParseTypeQualifierListOpt(
                                  getLangOpts());
       break;
     case tok::kw___raw:
-      isInvalid = DS.SetTypeQual(DeclSpec::TQ_raw, Loc, PrevSpec, DiagID,
+      if (getTargetInfo().isSigModeSupported()) {
+        isInvalid = DS.SetTypeQual(DeclSpec::TQ_raw, Loc, PrevSpec, DiagID,
                                  getLangOpts());
+      }                           
       break;
 
     // OpenCL qualifiers:
