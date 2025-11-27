@@ -3873,7 +3873,7 @@ QualType ASTContext::getRawPointerType(QualType T) const {
     Canonical = getPointerType(getCanonicalType(T));
 
     // Get the new insert position for the node we care about.
-    PointerType *NewIP = PointerTypes.FindNodeOrInsertPos(ID, InsertPos);
+    PointerType *NewIP = RawPointerTypes.FindNodeOrInsertPos(ID, InsertPos);
     assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
   }
   auto *New = new (*this, alignof(PointerType)) PointerType(T, Canonical);
