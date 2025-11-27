@@ -378,20 +378,9 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     return ConvertRecordDeclType(RT->getDecl()->getDefinitionOrSelf());
 
   llvm::Type *CachedType = nullptr;
-  if (Ty->getTypeClass() == Type::Pointer) {
-    auto TCI = PointerTypeCache.find(Ty);
-    if (TCI != PointerTypeCache.end()){
-      auto second_cache = TCI->second;
-      auto TCI = second_cache.find(T.isRawQualified());
-      if (TCI != second_cache.end()){
-        CachedType = TCI->second;
-      }
-    }
-  } else {
-    auto TCI = TypeCache.find(Ty);
-    if (TCI != TypeCache.end())
-      CachedType = TCI->second;
-  }
+  auto TCI = TypeCache.find(Ty);
+  if (TCI != TypeCache.end())
+    CachedType = TCI->second;
 
     // With expensive checks, check that the type we compute matches the
     // cached type.
@@ -629,13 +618,13 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     QualType ETy = PTy->getPointeeType();
     unsigned AS = 0;
     AS = getTargetAddressSpace(ETy);
-    llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
+    llvm::dbgs() << "AS of type " << T.getAsString() << " in normal is " << AS <<"\n";
     if(Context.getTargetInfo().isSigModeSupported()){
       if(PTy->getRaw()){
         llvm::dbgs() << "it is raw\n";
         if(!ETy.hasAddressSpace()){
           AS = CGM.getTargetCodeGenInfo().getSigModeRawTargetAddressSpace();
-          llvm::dbgs() << "AS of type " << ETy.getAsString() << " in sigmode is " << AS << "\n";
+          llvm::dbgs() << "AS of type " << T.getAsString() << " in sigmode is " << AS << "\n";
         }
       }
     }
@@ -800,11 +789,8 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
   assert((!CachedType || CachedType == ResultType) &&
          "Cached type doesn't match computed type");
 
-  if (Ty->getTypeClass() == Type::Pointer) {
-    PointerTypeCache[Ty][T.isRawQualified()] = ResultType;
-  } else {
-    TypeCache[Ty] = ResultType;
-  }
+  TypeCache[Ty] = ResultType;
+
   return ResultType;
 }
 
