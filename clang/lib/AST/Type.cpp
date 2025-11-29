@@ -488,24 +488,32 @@ const Type *Type::getArrayElementTypeNoTypeQual() const {
       .getTypePtr();
 }
 
+llvm::DenseMap<const Type*, bool> Type::haspointer_cache;
+
 bool Type::isContainPointer() const {
+  auto pointerI = haspointer_cache.find(this);
   bool flag = false;
-  if(isBuiltinType()) {
-    flag = false;
-  } else if (isPointerType()) {
-    flag = true;
-  } else if (isArrayType()) {
-    const Type* type = getAsArrayTypeUnsafe()->getElementType().getTypePtr();
-    flag = type->isContainPointer();
-  } else if (isRecordType()) {
-    if (RecordDecl *RD = getAsRecordDecl()) {
-      for (FieldDecl *FD : RD->fields()) {
-          if (FD->getType()->isContainPointer()) {
-              flag = true;
-              break;
-          }
+  if(pointerI == haspointer_cache.end()){
+    if(isBuiltinType()) {
+      flag = false;
+    } else if (isPointerType()) {
+      flag = true;
+    } else if (isArrayType()) {
+      const Type* type = getAsArrayTypeUnsafe()->getElementType().getTypePtr();
+      flag = type->isContainPointer();
+    } else if (isRecordType()) {
+      if (RecordDecl *RD = getAsRecordDecl()) {
+        for (FieldDecl *FD : RD->fields()) {
+            if (FD->getType()->isContainPointer()) {
+                flag = true;
+                break;
+            }
+        }
       }
     }
+    haspointer_cache[this] = flag;
+  } else {
+    flag = pointerI->second;
   }
   llvm::dbgs() << "isContainPointer:" << flag << "\n";
   return flag;

@@ -35,6 +35,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
@@ -48,7 +49,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/PointerLikeTypeTraits.h"
 #include "llvm/Support/TrailingObjects.h"
-#include "llvm/Support/type_traits.h"
 #include <bitset>
 #include <cassert>
 #include <cstddef>
@@ -1859,6 +1859,8 @@ public:
   };
 
 private:
+  static llvm::DenseMap<const Type*, bool> haspointer_cache;
+
   /// Bitfields required by the Type class.
   class TypeBitfields {
     friend class Type;
