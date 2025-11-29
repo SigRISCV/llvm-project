@@ -320,6 +320,15 @@ public:
   /// Get the AST address space for alloca.
   virtual LangAS getASTAllocaAddressSpace() const { return LangAS::Default; }
 
+  LangAS getSigModeRawAddressSpace() const {
+    return static_cast<LangAS>(100 + (unsigned)(LangAS::FirstTargetAddressSpace));
+  }
+
+  unsigned getSigModeRawTargetAddressSpace() const {
+    // return getABIInfo().getContext().getTargetAddressSpace(getSigModeRawAddressSpace());
+    return 100;
+  }
+
   Address performAddrSpaceCast(CodeGen::CodeGenFunction &CGF, Address Addr,
                                LangAS SrcAddr, llvm::Type *DestTy,
                                bool IsNonNull = false) const;

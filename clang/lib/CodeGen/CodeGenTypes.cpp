@@ -620,10 +620,10 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
     if(Context.getTargetInfo().isSigModeSupported()){
       llvm::dbgs() << "it is sigmode\n";
-      if(!ETy.isRawQualified()){
-        llvm::dbgs() << "it is not raw\n";
+      if(ETy.isRawQualified()){
+        llvm::dbgs() << "it is raw\n";
         if(!ETy.hasAddressSpace()){
-          AS = 200;
+          AS = CGM.getTargetCodeGenInfo().getSigModeRawTargetAddressSpace();
           llvm::dbgs() << "AS of type " << ETy.getAsString() << " in sigmode is " << AS << "\n";
         }
       }
