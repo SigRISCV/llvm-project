@@ -33,6 +33,7 @@
 #include "clang/AST/NSAPI.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Module.h"
@@ -194,7 +195,13 @@ RawAddress CodeGenFunction::CreateMemTemp(QualType Ty, const Twine &Name,
 RawAddress CodeGenFunction::CreateMemTemp(QualType Ty, CharUnits Align,
                                           const Twine &Name,
                                           RawAddress *Alloca) {
-  RawAddress Result = CreateTempAlloca(ConvertTypeForMem(Ty), Align, Name,
+
+  LangAS AS = LangAS::Default;
+  if(Ty.isRawQualified()){
+    AS = LangAS::sigmode_raw;
+  }
+
+  RawAddress Result = CreateTempAlloca(ConvertTypeForMem(Ty), AS , Align, Name,
                                        /*ArraySize=*/nullptr, Alloca);
 
   if (Ty->isConstantMatrixType()) {

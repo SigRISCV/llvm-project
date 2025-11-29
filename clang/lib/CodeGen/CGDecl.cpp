@@ -30,6 +30,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenACC.h"
 #include "clang/AST/DeclOpenMP.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
@@ -1600,7 +1601,11 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // Create the alloca.  Note that we set the name separately from
       // building the instruction so that it's there even in no-asserts
       // builds.
-      address = CreateTempAlloca(allocaTy, Ty.getAddressSpace(),
+      LangAS as = Ty.getAddressSpace();
+      if (!Ty.hasAddressSpace() && Ty.isRawQualified()){
+        as = LangAS::sigmode_raw;
+      }
+      address = CreateTempAlloca(allocaTy, as,
                                  allocaAlignment, D.getName(),
                                  /*ArraySize=*/nullptr, &AllocaAddr);
 
