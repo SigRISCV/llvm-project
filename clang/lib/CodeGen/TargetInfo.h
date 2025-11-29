@@ -18,6 +18,7 @@
 #include "CGValue.h"
 #include "CodeGenModule.h"
 #include "clang/AST/Type.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SyncScope.h"
 #include "clang/Basic/TargetInfo.h"
@@ -321,7 +322,7 @@ public:
   virtual LangAS getASTAllocaAddressSpace() const { return LangAS::Default; }
 
   LangAS getSigModeRawAddressSpace() const {
-    return static_cast<LangAS>(100 + (unsigned)(LangAS::FirstTargetAddressSpace));
+    return LangAS::sigmode_raw;
   }
 
   unsigned getSigModeRawTargetAddressSpace() const {
