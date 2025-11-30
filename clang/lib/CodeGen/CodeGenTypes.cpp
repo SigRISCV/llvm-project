@@ -23,6 +23,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/RecordLayout.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -618,16 +619,6 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     unsigned AS = 0;
     AS = getTargetAddressSpace(ETy);
     llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
-    if(Context.getTargetInfo().isSigModeSupported()){
-      llvm::dbgs() << "it is sigmode\n";
-      if(ETy.isRawQualified()){
-        llvm::dbgs() << "it is raw\n";
-        if(!ETy.hasAddressSpace()){
-          AS = CGM.getTargetCodeGenInfo().getSigModeRawTargetAddressSpace();
-          llvm::dbgs() << "AS of type " << ETy.getAsString() << " in sigmode is " << AS << "\n";
-        }
-      }
-    }
     ResultType = llvm::PointerType::get(getLLVMContext(), AS);
     break;
   }
@@ -908,7 +899,11 @@ unsigned CodeGenTypes::getTargetAddressSpace(QualType T) const {
   // function type without an address space qualifier, the
   // program address space is used. Otherwise, the target picks
   // the best address space based on the type information
+  LangAS as = T.getAddressSpace();
+  if (!T.hasAddressSpace() && T.isRawQualified()){
+    as = LangAS::sigmode_raw;
+  }
   return T->isFunctionType() && !T.hasAddressSpace()
              ? getDataLayout().getProgramAddressSpace()
-             : getContext().getTargetAddressSpace(T.getAddressSpace());
+             : getContext().getTargetAddressSpace(as);
 }
