@@ -4731,7 +4731,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
 
       if(DeclType.Ptr.TypeQuals & DeclSpec::TQ_raw){
         if(!T.isRawQualified()){
-          S.Diag(D.getIdentifierLoc(), diag::err_pointee_need_raw_attr) << T;
+          T = T.getRawChainType(Context);
         }
       }
 
@@ -4829,6 +4829,12 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
           ASM != ArraySizeModifier::Static && D.isPrototypeContext() &&
           !hasOuterPointerLikeChunk(D, chunkIndex)) {
         checkNullabilityConsistency(S, SimplePointerKind::Array, DeclType.Loc);
+      }
+
+      if (ATI.TypeQuals & DeclSpec::TQ_raw) {
+        if (!T.isRawQualified()) {
+          T = T.getRawChainType(Context);
+        }
       }
 
       T = S.BuildArrayType(T, ASM, ArraySize, ATI.TypeQuals,

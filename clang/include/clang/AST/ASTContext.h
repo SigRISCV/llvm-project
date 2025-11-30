@@ -2483,6 +2483,9 @@ public:
 
   /// Return a type with additional qualifiers.
   QualType getQualifiedType(QualType T, Qualifiers Qs) const {
+    if (Qs.hasRaw() && !T.isRawQualified()) {
+      T = T.getRawChainType(*this);
+    }
     if (!Qs.hasNonFastQualifiers())
       return T.withFastQualifiers(Qs.getFastQualifiers());
     QualifierCollector Qc(Qs);

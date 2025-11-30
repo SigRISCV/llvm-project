@@ -1677,6 +1677,23 @@ bool QualType::UseExcessPrecision(const ASTContext &Ctx) {
   return false;
 }
 
+QualType QualType::getRawChainType(const ASTContext &Ctx) {
+  const Type* type = getTypePtr();
+  QualType ret;
+  if (type->isBuiltinType() || type->isRecordType() || type->isArrayType()) {
+    ret = *this;
+  } else if (type->isPointerType()) {
+    const PointerType* pointer = cast<PointerType>(type);
+    QualType pointee = pointer->getPointeeType();
+    Qualifiers Qs = pointee.getQualifiers();
+    Qs.addRaw();
+    pointee = Ctx.getQualifiedType(pointee, Qs);
+    ret = Ctx.getPointerType(pointee);
+    ret = Ctx.getQualifiedType(ret, this->getQualifiers());
+  }
+  return ret;
+}
+
 /// Substitute the given type arguments for Objective-C type
 /// parameters within the given type, recursively.
 QualType QualType::substObjCTypeArgs(ASTContext &ctx,

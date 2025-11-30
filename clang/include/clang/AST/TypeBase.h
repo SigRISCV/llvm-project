@@ -982,6 +982,7 @@ public:
   void setLocalFastQualifiers(unsigned Quals) { Value.setInt(Quals); }
 
   bool UseExcessPrecision(const ASTContext &Ctx);
+  QualType getRawChainType(const ASTContext &Ctx);
 
   /// Retrieves a pointer to the underlying (unqualified) type.
   ///
