@@ -1424,6 +1424,8 @@ public:
   /// Return the address space of this type.
   inline LangAS getAddressSpace() const;
 
+  inline LangAS getAddressSpaceUnderSigMode() const;
+
   /// Returns true if address space qualifiers overlap with T address space
   /// qualifiers.
   /// OpenCL C defines conversion rules for pointers to different address spaces
@@ -8429,6 +8431,14 @@ inline bool QualType::hasAddressSpace() const {
 /// Return the address space of this type.
 inline LangAS QualType::getAddressSpace() const {
   return getQualifiers().getAddressSpace();
+}
+
+inline LangAS QualType::getAddressSpaceUnderSigMode() const {
+  LangAS as = getAddressSpace();
+  if (!hasAddressSpace() && isRawQualified()){
+    as = LangAS::sigmode_raw;
+  }
+  return as;
 }
 
 /// Return the gc attribute of this type.

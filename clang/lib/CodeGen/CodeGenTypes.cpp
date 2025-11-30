@@ -899,11 +899,7 @@ unsigned CodeGenTypes::getTargetAddressSpace(QualType T) const {
   // function type without an address space qualifier, the
   // program address space is used. Otherwise, the target picks
   // the best address space based on the type information
-  LangAS as = T.getAddressSpace();
-  if (!T.hasAddressSpace() && T.isRawQualified()){
-    as = LangAS::sigmode_raw;
-  }
   return T->isFunctionType() && !T.hasAddressSpace()
              ? getDataLayout().getProgramAddressSpace()
-             : getContext().getTargetAddressSpace(as);
+             : getContext().getTargetAddressSpace(T.getAddressSpaceUnderSigMode());
 }
