@@ -1157,8 +1157,12 @@ Address CodeGenModule::createUnnamedGlobalFrom(const VarDecl &D,
     auto *Ty = Constant->getType();
     bool isConstant = true;
     llvm::GlobalVariable *InsertBefore = nullptr;
+    LangAS as = GetGlobalConstantAddressSpace();
+    if (D.getType().isRawQualified() && !D.getType().hasAddressSpace()) {
+      as = LangAS::sigmode_raw;
+    }
     unsigned AS =
-        getContext().getTargetAddressSpace(GetGlobalConstantAddressSpace());
+        getContext().getTargetAddressSpace(as);
     std::string Name;
     if (D.hasGlobalStorage())
       Name = getMangledName(&D).str() + ".const";
