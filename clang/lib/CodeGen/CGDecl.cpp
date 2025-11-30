@@ -273,6 +273,11 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
   else
     Name = getStaticDeclName(*this, D);
 
+  if (D.getType().isRawQualified()) {
+    getDiags().Report(D.getBeginLoc(), diag::warn_ignore_static_raw) 
+      << D.getType().getAsString()
+      << D.getNameAsString();
+  }
   llvm::Type *LTy = getTypes().ConvertTypeForMem(Ty);
   LangAS AS = GetGlobalVarAddressSpace(&D);
   unsigned TargetAS = getContext().getTargetAddressSpace(AS);
