@@ -353,6 +353,7 @@ KEYWORD(__ptrauth                   , KEYALL)
 // SigMode
 
 KEYWORD(__raw                       , KEYALL)
+KEYWORD(__rawfunc                   , KEYALL)
 
 // C2y
 UNARY_EXPR_OR_TYPE_TRAIT(_Countof, CountOf, KEYNOCXX)

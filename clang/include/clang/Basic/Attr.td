@@ -1450,6 +1450,12 @@ def Raw : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def RawFunc : Attr {
+  let Spellings = [Clang<"__rawfunc">, CustomKeyword<"__rawfunc">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+}
+
 def ConstInit : InheritableAttr {
   // This attribute does not have a C [[]] spelling because it requires the
   // CPlusPlus language option.
