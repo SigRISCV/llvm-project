@@ -3993,11 +3993,6 @@ void Parser::ParseDeclarationSpecifiers(
     }
 
     // Attributes support.
-    case tok::kw___rawfunc:
-      isInvalid = DS.SetTypeQual(DeclSpec::TQ_raw, Loc, PrevSpec, DiagID,
-                                 getLangOpts());
-      break;
-      
     case tok::kw___attribute:
     case tok::kw___declspec:
       ParseAttributes(PAKM_GNU | PAKM_Declspec, DS.getAttributes(), LateAttrs);
