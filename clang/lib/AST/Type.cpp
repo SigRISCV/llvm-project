@@ -1677,17 +1677,38 @@ bool QualType::UseExcessPrecision(const ASTContext &Ctx) {
   return false;
 }
 
+static QualType getRawQual(QualType type, const ASTContext &Ctx) {
+  if (type.isRawQualified()) {
+    return type;
+  }
+  Qualifiers Qs = type.getQualifiers();
+  Qs.addRaw();
+  return Ctx.getQualifiedType(type, Qs);
+}
+
 QualType QualType::getRawChainType(const ASTContext &Ctx) {
   const Type* type = getTypePtr();
   QualType ret = *this;
-  if (type->isPointerType() && !type->isFunctionPointerType()) {
+  if (type->isPointerType()) {
     const PointerType* pointer = cast<PointerType>(type);
     QualType pointee = pointer->getPointeeType();
-    Qualifiers Qs = pointee.getQualifiers();
-    Qs.addRaw();
-    pointee = Ctx.getQualifiedType(pointee, Qs);
-    ret = Ctx.getPointerType(pointee);
-    ret = Ctx.getQualifiedType(ret, this->getQualifiers());
+    if (!pointee.isRawQualified()) {
+      if (pointee->isFunctionType()) {
+        const FunctionProtoType* function = pointee->getAs<FunctionProtoType>();
+        QualType rettype = getRawQual(function->getReturnType(), Ctx);
+        SmallVector<QualType, 16> ParamTys;
+        for (QualType qual:function->getParamTypes()) {
+          qual = qual.getRawChainType(Ctx);
+          ParamTys.push_back(qual);
+        }
+        FunctionProtoType::ExtProtoInfo EPI = function->getExtProtoInfo();
+        pointee = Ctx.getFunctionType(rettype, ParamTys, EPI);
+      } else {
+        pointee = getRawQual(pointee, Ctx);
+      }
+      ret = Ctx.getPointerType(pointee);
+      ret = Ctx.getQualifiedType(ret, this->getQualifiers());
+    }
   }
   return ret;
 }

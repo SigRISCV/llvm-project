@@ -5226,6 +5226,9 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
         for (unsigned i = 0, e = FTI.NumParams; i != e; ++i) {
           ParmVarDecl *Param = cast<ParmVarDecl>(FTI.Params[i].Param);
           QualType ParamTy = Param->getType();
+          if (T.isRawQualified()) {
+            ParamTy = ParamTy.getRawChainType(Context);
+          }
           assert(!ParamTy.isNull() && "Couldn't parse type?");
 
           // Look for 'void'.  void is allowed only as a single parameter to a
