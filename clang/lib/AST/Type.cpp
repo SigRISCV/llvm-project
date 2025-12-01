@@ -1679,10 +1679,8 @@ bool QualType::UseExcessPrecision(const ASTContext &Ctx) {
 
 QualType QualType::getRawChainType(const ASTContext &Ctx) {
   const Type* type = getTypePtr();
-  QualType ret;
-  if (type->isBuiltinType() || type->isRecordType() || type->isArrayType()) {
-    ret = *this;
-  } else if (type->isPointerType()) {
+  QualType ret = *this;
+  if (type->isPointerType() && !type->isFunctionPointerType()) {
     const PointerType* pointer = cast<PointerType>(type);
     QualType pointee = pointer->getPointeeType();
     Qualifiers Qs = pointee.getQualifiers();
