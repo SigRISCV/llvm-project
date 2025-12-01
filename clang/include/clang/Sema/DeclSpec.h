@@ -306,7 +306,8 @@ public:
     TQ_unaligned   = 8,
     // This has no corresponding Qualifiers::TQ value, because it's not treated
     // as a qualifier in our type system.
-    TQ_atomic      = 16
+    TQ_atomic      = 16,
+    TQ_raw         = 32,
   };
 
   /// ParsedSpecifiers - Flags to query which specifiers were applied.  This is
@@ -357,7 +358,7 @@ private:
 
   // type-qualifiers
   LLVM_PREFERRED_TYPE(TQ)
-  unsigned TypeQualifiers : 5;  // Bitwise OR of TQ.
+  unsigned TypeQualifiers : 6;  // Bitwise OR of TQ.
 
   // function-specifier
   LLVM_PREFERRED_TYPE(bool)
@@ -408,7 +409,7 @@ private:
   SourceLocation TSTNameLoc;
   SourceRange TypeofParensRange;
   SourceLocation TQ_constLoc, TQ_restrictLoc, TQ_volatileLoc, TQ_atomicLoc,
-      TQ_unalignedLoc;
+      TQ_unalignedLoc, TQ_rawLoc;
   SourceLocation FS_inlineLoc, FS_virtualLoc, FS_explicitLoc, FS_noreturnLoc;
   SourceLocation FS_explicitCloseParenLoc;
   SourceLocation FS_forceinlineLoc;
@@ -589,6 +590,7 @@ public:
   SourceLocation getVolatileSpecLoc() const { return TQ_volatileLoc; }
   SourceLocation getAtomicSpecLoc() const { return TQ_atomicLoc; }
   SourceLocation getUnalignedSpecLoc() const { return TQ_unalignedLoc; }
+  SourceLocation getRawSpecLoc() const { return TQ_rawLoc; }
   SourceLocation getPipeLoc() const { return TQ_pipeLoc; }
   SourceLocation getEllipsisLoc() const { return EllipsisLoc; }
 
@@ -1241,7 +1243,7 @@ struct DeclaratorChunk {
   struct PointerTypeInfo {
     /// The type qualifiers: const/volatile/restrict/unaligned/atomic.
     LLVM_PREFERRED_TYPE(DeclSpec::TQ)
-    unsigned TypeQuals : 5;
+    unsigned TypeQuals : 6;
 
     /// The location of the const-qualifier, if any.
     SourceLocation ConstQualLoc;
@@ -1257,6 +1259,9 @@ struct DeclaratorChunk {
 
     /// The location of the __unaligned-qualifier, if any.
     SourceLocation UnalignedQualLoc;
+
+    /// The location of the __raw-qualifier, if any.
+    SourceLocation RawQualLoc;
 
     void destroy() {
     }
@@ -1639,7 +1644,8 @@ struct DeclaratorChunk {
                                     SourceLocation VolatileQualLoc,
                                     SourceLocation RestrictQualLoc,
                                     SourceLocation AtomicQualLoc,
-                                    SourceLocation UnalignedQualLoc) {
+                                    SourceLocation UnalignedQualLoc,
+                                    SourceLocation RawQualLoc) {
     DeclaratorChunk I;
     I.Kind                = Pointer;
     I.Loc                 = Loc;
@@ -1650,6 +1656,7 @@ struct DeclaratorChunk {
     I.Ptr.RestrictQualLoc = RestrictQualLoc;
     I.Ptr.AtomicQualLoc   = AtomicQualLoc;
     I.Ptr.UnalignedQualLoc = UnalignedQualLoc;
+    I.Ptr.RawQualLoc      = RawQualLoc;
     return I;
   }
 

@@ -144,6 +144,13 @@ def ext_c_empty_initializer : Extension<
 def warn_c23_compat_empty_initializer : Warning<
   "use of an empty initializer is incompatible with C standards before C23">,
   InGroup<CPre23Compat>, DefaultIgnore;
+
+def err_cast_with_attr_without_pointer : Error<
+  "for cast between raw pointer an not raw pointer, the dest type %0 cannot include pointer">;
+
+def warn_ignore_static_raw : Warning<
+  "the __raw qualify of static variable %0 %1 will be ignored">;
+
 }
 
 let CategoryName = "Nullability Issue" in {

@@ -307,6 +307,8 @@ def ext_designated_init_brace_elision : ExtWarn<
   InGroup<C99Designator>, SFINAEFailure;
 
 // Declarations.
+def err_pointee_need_raw_attr : Error<
+  "the pointee type %0 contained pointers must be qualified by 'raw'">;
 def ext_plain_complex : ExtWarn<
   "plain '_Complex' requires a type specifier; assuming '_Complex double'">;
 def warn_c23_compat_imaginary_constant : Warning<

@@ -37,6 +37,7 @@
 #include "clang/AST/Mangle.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
@@ -5533,7 +5534,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
     SanitizerMD->reportGlobal(GV, *D);
 
   LangAS ExpectedAS =
-      D ? D->getType().getAddressSpace()
+      D ? D->getType().getAddressSpaceUnderSigMode()
         : (LangOpts.OpenCL ? LangAS::opencl_global : LangAS::Default);
   assert(getContext().getTargetAddressSpace(ExpectedAS) == TargetAS);
   if (DAddrSpace != ExpectedAS) {
@@ -5627,7 +5628,7 @@ llvm::Constant *CodeGenModule::GetAddrOfGlobalVar(const VarDecl *D,
     Ty = getTypes().ConvertTypeForMem(ASTTy);
 
   StringRef MangledName = getMangledName(D);
-  return GetOrCreateLLVMGlobal(MangledName, Ty, ASTTy.getAddressSpace(), D,
+  return GetOrCreateLLVMGlobal(MangledName, Ty, ASTTy.getAddressSpaceUnderSigMode(), D,
                                IsForDefinition);
 }
 

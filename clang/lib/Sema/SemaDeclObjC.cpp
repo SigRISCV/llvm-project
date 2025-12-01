@@ -1613,6 +1613,7 @@ void SemaObjC::actOnObjCTypeArgsOrProtocolQualifiers(
                                                 SourceLocation(),
                                                 SourceLocation(),
                                                 SourceLocation(),
+                                                SourceLocation(),
                                                 SourceLocation()),
                                                 starLoc);
 

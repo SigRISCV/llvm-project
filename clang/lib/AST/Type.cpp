@@ -27,6 +27,8 @@
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
+#include "clang/AST/TypeBase.h"
+#include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeVisitor.h"
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/ExceptionSpecificationType.h"
@@ -35,6 +37,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/Linkage.h"
 #include "clang/Basic/Specifiers.h"
+#include "clang/Basic/SyncScope.h"
 #include "clang/Basic/TargetCXXABI.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/Visibility.h"
@@ -44,6 +47,7 @@
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
@@ -482,6 +486,37 @@ const Type *Type::getArrayElementTypeNoTypeQual() const {
   return cast<ArrayType>(getUnqualifiedDesugaredType())
       ->getElementType()
       .getTypePtr();
+}
+
+llvm::DenseMap<const Type*, bool> Type::haspointer_cache;
+
+bool Type::isContainPointer() const {
+  auto pointerI = haspointer_cache.find(this);
+  bool flag = false;
+  if(pointerI == haspointer_cache.end()){
+    if(isBuiltinType()) {
+      flag = false;
+    } else if (isPointerType()) {
+      flag = true;
+    } else if (isArrayType()) {
+      const Type* type = getAsArrayTypeUnsafe()->getElementType().getTypePtr();
+      flag = type->isContainPointer();
+    } else if (isRecordType()) {
+      if (RecordDecl *RD = getAsRecordDecl()) {
+        for (FieldDecl *FD : RD->fields()) {
+            if (FD->getType()->isContainPointer()) {
+                flag = true;
+                break;
+            }
+        }
+      }
+    }
+    haspointer_cache[this] = flag;
+  } else {
+    flag = pointerI->second;
+  }
+  llvm::dbgs() << "isContainPointer:" << flag << "\n";
+  return flag;
 }
 
 /// getDesugaredType - Return the specified type with any "sugar" removed from
@@ -1640,6 +1675,21 @@ bool QualType::UseExcessPrecision(const ASTContext &Ctx) {
     }
   }
   return false;
+}
+
+QualType QualType::getRawChainType(const ASTContext &Ctx) {
+  const Type* type = getTypePtr();
+  QualType ret = *this;
+  if (type->isPointerType() && !type->isFunctionPointerType()) {
+    const PointerType* pointer = cast<PointerType>(type);
+    QualType pointee = pointer->getPointeeType();
+    Qualifiers Qs = pointee.getQualifiers();
+    Qs.addRaw();
+    pointee = Ctx.getQualifiedType(pointee, Qs);
+    ret = Ctx.getPointerType(pointee);
+    ret = Ctx.getQualifiedType(ret, this->getQualifiers());
+  }
+  return ret;
 }
 
 /// Substitute the given type arguments for Objective-C type

@@ -18,6 +18,7 @@
 #include "CGValue.h"
 #include "CodeGenModule.h"
 #include "clang/AST/Type.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SyncScope.h"
 #include "clang/Basic/TargetInfo.h"
@@ -319,6 +320,15 @@ public:
 
   /// Get the AST address space for alloca.
   virtual LangAS getASTAllocaAddressSpace() const { return LangAS::Default; }
+
+  LangAS getSigModeRawAddressSpace() const {
+    return LangAS::sigmode_raw;
+  }
+
+  unsigned getSigModeRawTargetAddressSpace() const {
+    // return getABIInfo().getContext().getTargetAddressSpace(getSigModeRawAddressSpace());
+    return 100;
+  }
 
   Address performAddrSpaceCast(CodeGen::CodeGenFunction &CGF, Address Addr,
                                LangAS SrcAddr, llvm::Type *DestTy,

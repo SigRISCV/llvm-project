@@ -4505,7 +4505,10 @@ void Parser::ParseDeclarationSpecifiers(
       break;
     
     case tok::kw___raw:
-      ParseRawQualifiers(DS.getAttributes());
+      if (getTargetInfo().isSigModeSupported()) {
+        isInvalid = DS.SetTypeQual(DeclSpec::TQ_raw, Loc, PrevSpec, DiagID,
+                                  getLangOpts());
+      }
       break;
 
     // C++ typename-specifier:
@@ -6189,7 +6192,10 @@ void Parser::ParseTypeQualifierListOpt(
                                  getLangOpts());
       break;
     case tok::kw___raw:
-      ParseRawQualifiers(DS.getAttributes());
+      if (getTargetInfo().isSigModeSupported()) {
+        isInvalid = DS.SetTypeQual(DeclSpec::TQ_raw, Loc, PrevSpec, DiagID,
+                                  getLangOpts());
+      }
       break;
 
     // OpenCL qualifiers:
@@ -6482,7 +6488,8 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
       D.AddTypeInfo(DeclaratorChunk::getPointer(
                         DS.getTypeQualifiers(), Loc, DS.getConstSpecLoc(),
                         DS.getVolatileSpecLoc(), DS.getRestrictSpecLoc(),
-                        DS.getAtomicSpecLoc(), DS.getUnalignedSpecLoc()),
+                        DS.getAtomicSpecLoc(), DS.getUnalignedSpecLoc(),
+                        DS.getRawSpecLoc()),
                     std::move(DS.getAttributes()), SourceLocation());
     else
       // Remember that we parsed a Block type, and remember the type-quals.

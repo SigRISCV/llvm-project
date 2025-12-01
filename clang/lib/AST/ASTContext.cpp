@@ -11640,7 +11640,8 @@ QualType ASTContext::mergeTypes(QualType LHS, QualType RHS, bool OfBlockPointer,
         LQuals.getAddressSpace() != RQuals.getAddressSpace() ||
         LQuals.getObjCLifetime() != RQuals.getObjCLifetime() ||
         !LQuals.getPointerAuth().isEquivalent(RQuals.getPointerAuth()) ||
-        LQuals.hasUnaligned() != RQuals.hasUnaligned())
+        LQuals.hasUnaligned() != RQuals.hasUnaligned() ||
+        LQuals.hasRaw() != RQuals.hasRaw())
       return {};
 
     // Exactly one GC qualifier difference is allowed: __strong is

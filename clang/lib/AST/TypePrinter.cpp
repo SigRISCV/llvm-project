@@ -2701,6 +2701,9 @@ bool Qualifiers::isEmptyWhenPrinted(const PrintingPolicy &Policy) const {
       PointerAuth && !PointerAuth.isEmptyWhenPrinted(Policy))
     return false;
 
+  if (hasRaw())
+    return false;
+
   return true;
 }
 
@@ -2772,6 +2775,12 @@ void Qualifiers::print(raw_ostream &OS, const PrintingPolicy& Policy,
     if (addSpace)
       OS << ' ';
     OS << "__unaligned";
+    addSpace = true;
+  }
+  if (hasRaw()) {
+    if (addSpace)
+      OS << ' ';
+    OS << "__raw";
     addSpace = true;
   }
   auto ASStr = getAddrSpaceAsString(getAddressSpace());

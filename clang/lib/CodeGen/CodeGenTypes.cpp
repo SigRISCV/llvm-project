@@ -23,10 +23,12 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/RecordLayout.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/Debug.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -614,7 +616,9 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
   case Type::Pointer: {
     const PointerType *PTy = cast<PointerType>(Ty);
     QualType ETy = PTy->getPointeeType();
-    unsigned AS = getTargetAddressSpace(ETy);
+    unsigned AS = 0;
+    AS = getTargetAddressSpace(ETy);
+    llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
     ResultType = llvm::PointerType::get(getLLVMContext(), AS);
     break;
   }
@@ -897,5 +901,5 @@ unsigned CodeGenTypes::getTargetAddressSpace(QualType T) const {
   // the best address space based on the type information
   return T->isFunctionType() && !T.hasAddressSpace()
              ? getDataLayout().getProgramAddressSpace()
-             : getContext().getTargetAddressSpace(T.getAddressSpace());
+             : getContext().getTargetAddressSpace(T.getAddressSpaceUnderSigMode());
 }

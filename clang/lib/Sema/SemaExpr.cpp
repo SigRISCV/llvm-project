@@ -63,6 +63,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/TypeSize.h"
@@ -9048,6 +9049,14 @@ static AssignConvertType checkPointerTypesForAssignment(Sema &S,
     // Ignore lifetime for further calculation.
     lhq.removeObjCLifetime();
     rhq.removeObjCLifetime();
+  }
+
+  if (!lhptee->isContainPointer()) {
+    lhq.addRaw();
+  }
+
+  if (!rhptee->isContainPointer()) {
+    rhq.addRaw();
   }
 
   if (!lhq.compatiblyIncludes(rhq, S.getASTContext())) {

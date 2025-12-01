@@ -30,6 +30,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenACC.h"
 #include "clang/AST/DeclOpenMP.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
@@ -272,6 +273,11 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
   else
     Name = getStaticDeclName(*this, D);
 
+  if (D.getType().isRawQualified()) {
+    getDiags().Report(D.getBeginLoc(), diag::warn_ignore_static_raw) 
+      << D.getType().getAsString()
+      << D.getNameAsString();
+  }
   llvm::Type *LTy = getTypes().ConvertTypeForMem(Ty);
   LangAS AS = GetGlobalVarAddressSpace(&D);
   unsigned TargetAS = getContext().getTargetAddressSpace(AS);
@@ -1156,8 +1162,12 @@ Address CodeGenModule::createUnnamedGlobalFrom(const VarDecl &D,
     auto *Ty = Constant->getType();
     bool isConstant = true;
     llvm::GlobalVariable *InsertBefore = nullptr;
+    LangAS as = GetGlobalConstantAddressSpace();
+    if (D.getType().isRawQualified() && !D.getType().hasAddressSpace()) {
+      as = LangAS::sigmode_raw;
+    }
     unsigned AS =
-        getContext().getTargetAddressSpace(GetGlobalConstantAddressSpace());
+        getContext().getTargetAddressSpace(as);
     std::string Name;
     if (D.hasGlobalStorage())
       Name = getMangledName(&D).str() + ".const";
@@ -1600,7 +1610,11 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // Create the alloca.  Note that we set the name separately from
       // building the instruction so that it's there even in no-asserts
       // builds.
-      address = CreateTempAlloca(allocaTy, Ty.getAddressSpace(),
+      LangAS as = Ty.getAddressSpace();
+      if (!Ty.hasAddressSpace() && Ty.isRawQualified()){
+        as = LangAS::sigmode_raw;
+      }
+      address = CreateTempAlloca(allocaTy, as,
                                  allocaAlignment, D.getName(),
                                  /*ArraySize=*/nullptr, &AllocaAddr);
 

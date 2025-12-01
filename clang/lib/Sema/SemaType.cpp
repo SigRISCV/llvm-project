@@ -23,6 +23,7 @@
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/LocInfoType.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeLocVisitor.h"
 #include "clang/Basic/LangOptions.h"
@@ -46,6 +47,7 @@
 #include "llvm/ADT/STLForwardCompat.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <bitset>
 #include <optional>
@@ -1640,7 +1642,7 @@ QualType Sema::BuildQualifiedType(QualType T, SourceLocation Loc,
 
   // Convert from DeclSpec::TQ to Qualifiers::TQ by just dropping TQ_atomic and
   // TQ_unaligned;
-  unsigned CVR = CVRAU & ~(DeclSpec::TQ_atomic | DeclSpec::TQ_unaligned);
+  unsigned CVR = CVRAU & ~(DeclSpec::TQ_atomic | DeclSpec::TQ_unaligned | DeclSpec::TQ_raw);
 
   // C11 6.7.3/5:
   //   If the same qualifier appears more than once in the same
@@ -1664,11 +1666,15 @@ QualType Sema::BuildQualifiedType(QualType T, SourceLocation Loc,
     if (T.isNull())
       return T;
     Split.Quals.addCVRQualifiers(CVR);
+    Split.Quals.setRaw(CVRAU & DeclSpec::TQ_raw);
+
     return BuildQualifiedType(T, Loc, Split.Quals);
   }
 
   Qualifiers Q = Qualifiers::fromCVRMask(CVR);
   Q.setUnaligned(CVRAU & DeclSpec::TQ_unaligned);
+  Q.setRaw(CVRAU & DeclSpec::TQ_raw);
+
   return BuildQualifiedType(T, Loc, Q, DS);
 }
 
@@ -4723,9 +4729,16 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
         }
       }
 
+      if(DeclType.Ptr.TypeQuals & DeclSpec::TQ_raw){
+        if(!T.isRawQualified()){
+          T = T.getRawChainType(Context);
+        }
+      }
+
       T = S.BuildPointerType(T, DeclType.Loc, Name);
       if (DeclType.Ptr.TypeQuals)
         T = S.BuildQualifiedType(T, DeclType.Loc, DeclType.Ptr.TypeQuals);
+      llvm::dbgs() << "the type of pointer is " << T.getAsString() << "\n";
       break;
     case DeclaratorChunk::Reference: {
       // Verify that we're not building a reference to pointer to function with
@@ -4816,6 +4829,12 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
           ASM != ArraySizeModifier::Static && D.isPrototypeContext() &&
           !hasOuterPointerLikeChunk(D, chunkIndex)) {
         checkNullabilityConsistency(S, SimplePointerKind::Array, DeclType.Loc);
+      }
+
+      if (ATI.TypeQuals & DeclSpec::TQ_raw) {
+        if (!T.isRawQualified()) {
+          T = T.getRawChainType(Context);
+        }
       }
 
       T = S.BuildArrayType(T, ASM, ArraySize, ATI.TypeQuals,

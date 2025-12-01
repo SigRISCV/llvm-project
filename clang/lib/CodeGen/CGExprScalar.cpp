@@ -29,7 +29,9 @@
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/Basic/CodeGenOptions.h"
+#include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/DiagnosticTrap.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/ADT/APFixedPoint.h"
@@ -2493,6 +2495,19 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     if (auto A = dyn_cast<llvm::Argument>(Src); A && A->hasStructRetAttr())
       return CGF.CGM.getTargetCodeGenInfo().performAddrSpaceCast(
           CGF, Src, E->getType().getAddressSpace(), DstTy);
+
+    unsigned int raw_addrspace = CGF.CGM.getTargetCodeGenInfo().getSigModeRawTargetAddressSpace();
+    if(SrcTy->isPtrOrPtrVectorTy() && DstTy->isPtrOrPtrVectorTy() &&
+      SrcTy->getPointerAddressSpace() != DstTy->getPointerAddressSpace() &&
+      (SrcTy->getPointerAddressSpace() == raw_addrspace || DstTy->getPointerAddressSpace() == raw_addrspace)){
+      QualType pointee = cast<PointerType>(DestTy)->getPointeeType();
+      const Type* pointee_type = pointee.getTypePtr();
+      if (pointee_type->isContainPointer()) {
+        CGF.CGM.getDiags().Report(CE->getBeginLoc(), diag::err_cast_with_attr_without_pointer) << pointee.getAsString();
+      }
+      return CGF.CGM.getTargetCodeGenInfo().performAddrSpaceCast(
+          CGF, Src, E->getType().getAddressSpace(), DstTy);
+    }
 
     assert(
         (!SrcTy->isPtrOrPtrVectorTy() || !DstTy->isPtrOrPtrVectorTy() ||
