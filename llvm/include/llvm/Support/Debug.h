@@ -103,6 +103,7 @@ LLVM_ABI extern bool EnableDebugBuffering;
 /// messages.  If debugging is disabled it returns errs().  Use it
 /// like: dbgs() << "foo" << "bar";
 LLVM_ABI raw_ostream &dbgs();
+#define DEBUG_FILE llvm::dbgs() << __FUNCTION__ << " " << __FILE__ << ":" << __LINE__ << "\n"
 
 // DEBUG macro - This macro should be used by passes to emit debug information.
 // If the '-debug' option is specified on the commandline, and if this is a
