@@ -1031,6 +1031,15 @@ SourceLocation Parser::SkipExtendedMicrosoftTypeAttributes() {
   }
 }
 
+void Parser::ParseRawQualifiers(ParsedAttributes &attrs) {
+  IdentifierInfo *AttrName = Tok.getIdentifierInfo();
+  SourceLocation AttrNameLoc = Tok.getLocation();
+  if (getTargetInfo().isSigModeSupported()) {
+    attrs.addNew(AttrName, AttrNameLoc, AttributeScopeInfo(), nullptr, 0,
+                tok::kw___raw);
+  }
+}
+
 void Parser::ParseBorlandTypeAttributes(ParsedAttributes &attrs) {
   // Treat these like attributes
   while (Tok.is(tok::kw___pascal)) {
