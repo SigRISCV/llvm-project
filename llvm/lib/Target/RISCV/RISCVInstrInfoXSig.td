@@ -19,10 +19,12 @@ def simm12_pcrel : BareSImm12PcRelMaybeSym,
 let Predicates = [HasVendorXSig] in {
 
 // ls uses custom opcode OPC_CUSTOM_0 (0b0001011) with I-type format
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in
 def LS : RVInstI<0b111, OPC_CUSTOM_0, (outs GPR:$rd), (ins GPRMem:$rs1, simm12_lo:$imm12),
                  "ls", "$rd, ${imm12}(${rs1})">,
          Sched<[WriteLDW, ReadMemBase]>;
 // ss uses custom opcode OPC_CUSTOM_1 (0b0101011) with S-type format
+let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in
 def SS : RVInstS<0b100, OPC_CUSTOM_1, (outs),
                  (ins GPR:$rs2, GPRMem:$rs1, simm12_lo:$imm12),
                  "ss", "$rs2, ${imm12}(${rs1})">,
