@@ -47,6 +47,7 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/MatrixBuilder.h"
 #include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
@@ -5357,6 +5358,9 @@ LValue CodeGenFunction::EmitLValueForField(LValue base, const FieldDecl *field,
   // FIXME: this should get propagated down through anonymous structs
   // and unions.
   QualType FieldType = field->getType();
+  if (base.getQuals().hasRaw()) {
+    FieldType = FieldType.getRawChainType(getContext());
+  }
   const RecordDecl *rec = field->getParent();
   AlignmentSource BaseAlignSource = BaseInfo.getAlignmentSource();
   LValueBaseInfo FieldBaseInfo(getFieldAlignmentSource(BaseAlignSource));
