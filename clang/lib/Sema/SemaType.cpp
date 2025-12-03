@@ -4738,7 +4738,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
       T = S.BuildPointerType(T, DeclType.Loc, Name);
       if (DeclType.Ptr.TypeQuals)
         T = S.BuildQualifiedType(T, DeclType.Loc, DeclType.Ptr.TypeQuals);
-      llvm::dbgs() << "the type of pointer is " << T.getAsString() << "\n";
+      // llvm::dbgs() << "the type of pointer is " << T.getAsString() << "\n";
       break;
     case DeclaratorChunk::Reference: {
       // Verify that we're not building a reference to pointer to function with

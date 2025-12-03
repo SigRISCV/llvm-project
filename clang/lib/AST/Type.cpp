@@ -515,7 +515,7 @@ bool Type::isContainPointer() const {
   } else {
     flag = pointerI->second;
   }
-  llvm::dbgs() << "isContainPointer:" << flag << "\n";
+  // llvm::dbgs() << "isContainPointer:" << flag << "\n";
   return flag;
 }
 

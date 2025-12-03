@@ -618,7 +618,7 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     QualType ETy = PTy->getPointeeType();
     unsigned AS = 0;
     AS = getTargetAddressSpace(ETy);
-    llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
+    // llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
     ResultType = llvm::PointerType::get(getLLVMContext(), AS);
     break;
   }
