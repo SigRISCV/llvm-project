@@ -14,6 +14,7 @@
 #include "MCTargetDesc/RISCVBaseInfo.h"
 #include "RISCV.h"
 #include "RISCVMachineFunctionInfo.h"
+#include "RISCVSubtarget.h"
 #include "RISCVTargetObjectFile.h"
 #include "RISCVTargetTransformInfo.h"
 #include "TargetInfo/RISCVTargetInfo.h"
@@ -267,6 +268,10 @@ RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
 // change to this, they can override it here.
 bool RISCVTargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
                                              unsigned DstAS) const {
+  if (SrcAS == 0 && DstAS == 100) {
+    return false;
+  }
+  
   return true;
 }
 

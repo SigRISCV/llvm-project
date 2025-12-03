@@ -25,6 +25,7 @@
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
+#include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -32,6 +33,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SDPatternMatch.h"
 #include "llvm/CodeGen/SelectionDAGAddressAnalysis.h"
+#include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -1749,6 +1751,11 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
   if (Subtarget.hasVendorXAndesBFHCvt() && !Subtarget.hasStdExtZfh()) {
     setOperationAction(ISD::LOAD, MVT::bf16, Custom);
     setOperationAction(ISD::STORE, MVT::bf16, Custom);
+  }
+
+  if (Subtarget.hasVendorXSig() && Subtarget.isSigMode()) {
+    setOperationAction(ISD::ADDRSPACECAST, MVT::i32, Custom);
+    setOperationAction(ISD::ADDRSPACECAST, MVT::i64, Custom);
   }
 
   // Function alignments.
@@ -7556,12 +7563,33 @@ RISCVTargetLowering::lowerXAndesBfHCvtBFloat16Store(SDValue Op,
       ST->getMemOperand());
 }
 
+SDValue RISCVTargetLowering::LowerAddrSpaceCast(SDValue Op, 
+                                                 SelectionDAG &DAG) const {
+
+  AddrSpaceCastSDNode *ASC = cast<AddrSpaceCastSDNode>(Op);
+  SDLoc DL(Op);
+  
+  unsigned SrcAS = ASC->getSrcAddressSpace();
+  unsigned DstAS = ASC->getDestAddressSpace();
+  
+  SDValue Src = Op.getOperand(0);
+  
+  if (SrcAS == 0 && DstAS == 100) {
+    return DAG.getNode(RISCVISD::XSIG_SETRAWID,
+        DL, Op.getValueType(), Src);
+  }
+  
+  return Src;
+}
+
 SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
                                             SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
   default:
     reportFatalInternalError(
         "Unimplemented RISCVTargetLowering::LowerOperation Case");
+  case ISD::ADDRSPACECAST:
+    return LowerAddrSpaceCast(Op, DAG);
   case ISD::PREFETCH:
     return LowerPREFETCH(Op, Subtarget, DAG);
   case ISD::ATOMIC_FENCE:
