@@ -1747,7 +1747,7 @@ def HasVendorXSMTVDot
 //===----------------------------------------------------------------------===//
 
 def FeatureSigMode
-    : SubtargetFeature<"sig-mode", "IsSigCapMode", "true", "Enable Sig Mode">;
+    : SubtargetFeature<"sig-mode", "IsSigMode", "true", "Enable Sig Mode">;
 def IsSigMode : Predicate<"SubTarget->isSigMode()">,
                 AssemblerPredicate<(all_of FeatureSigMode),
                                    "Enable Sig Mode">;
