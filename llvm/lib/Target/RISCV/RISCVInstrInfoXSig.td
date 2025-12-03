@@ -16,9 +16,13 @@ def simm12_pcrel : BareSImm12PcRelMaybeSym,
   let OperandType = "OPERAND_PCREL";
 }
 
+// Define SDNode
+def xsig_setrawid : RVSDNode<"XSIG_SETRAWID",
+    SDTypeProfile<1, 1, [SDTCisVT<0, i64>, SDTCisVT<1, i64>]>, []>;
+
 let Predicates = [HasVendorXSig] in {
 
-
+// Define Inst
 let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in
 def LS : RVInstI<0b111, OPC_CUSTOM_2, (outs GPR:$rd), (ins GPRMem:$rs1, simm12_lo:$imm12),
                  "ls", "$rd, ${imm12}(${rs1})">,
@@ -31,12 +35,12 @@ def SS : RVInstS<0b100, OPC_CUSTOM_2, (outs),
          Sched<[WriteSTD, ReadStoreData, ReadMemBase]>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
-def SETRAW : RVInstI<0b000, OPC_CUSTOM_2, (outs GPR:$rd),
+def SETRAWID : RVInstI<0b000, OPC_CUSTOM_2, (outs GPR:$rd),
                      (ins GPR:$rs1, simm12_lo:$imm12),
-                     "setraw", "$rd, $rs1, $imm12">,
+                     "setrawid", "$rd, $rs1, $imm12">,
              Sched<[WriteIALU, ReadIALU]>;
 
-let hasSideEffects = 1, mayLoad = 0, mayStore = 0, isBarrier = 1, isTerminator = 1 in
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0, isBarrier = 1 in
 def SWITCHS : RVInstI<0b001, OPC_CUSTOM_2, (outs),
                       (ins GPR:$rs1, simm12_pcrel:$imm12),
                       "switchs", "$rs1, $imm12">,
@@ -52,4 +56,8 @@ def SETNEWID : RVInstI<0b010, OPC_CUSTOM_2, (outs GPR:$rd),
                        "setnewid", "$rd, $rs1, $imm12">,
                Sched<[WriteIALU, ReadIALU]>;
 
+
+// Define Pat
+def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
 }
