@@ -3361,6 +3361,9 @@ class PointerType : public Type, public llvm::FoldingSetNode {
 
 public:
   QualType getPointeeType() const { return PointeeType; }
+  bool isPointeeRaw() const {
+    return PointeeType.isRawQualified();
+  }
 
   bool isSugared() const { return false; }
   QualType desugar() const { return QualType(this, 0); }

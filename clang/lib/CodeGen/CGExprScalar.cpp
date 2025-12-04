@@ -50,6 +50,7 @@
 #include "llvm/IR/IntrinsicsPowerPC.h"
 #include "llvm/IR/MatrixBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/TypeSize.h"
 #include <cstdarg>
 #include <optional>
@@ -2799,6 +2800,17 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       // not carries it.
       if (SrcType.mayBeDynamicClass())
         PtrExpr = Builder.CreateStripInvariantGroup(PtrExpr);
+    }
+
+    if (CGF.getContext().getTargetInfo().isSigModeSupported()) {
+      const PointerType* PT = E->getType()->getAs<PointerType>();
+      if (!PT->isPointeeRaw()) {
+        QualType raw_pointer_type = E->getType().getRawChainType(CGF.getContext());
+        PtrExpr = CGF.authPointerToPointerCast(PtrExpr, E->getType(), raw_pointer_type);
+        PtrExpr = Builder.CreateAddrSpaceCast(PtrExpr, ConvertType(raw_pointer_type));
+        PtrExpr = CGF.authPointerToPointerCast(PtrExpr, raw_pointer_type, DestTy);
+        return Builder.CreatePtrToInt(PtrExpr, ConvertType(DestTy));
+      }
     }
 
     PtrExpr = CGF.authPointerToPointerCast(PtrExpr, E->getType(), DestTy);
