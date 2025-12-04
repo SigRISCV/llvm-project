@@ -58,6 +58,7 @@ def SETNEWID : RVInstI<0b010, OPC_CUSTOM_2, (outs GPR:$rd),
 
 
 // Define Pat
-def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
 def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
+def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
+
 }
