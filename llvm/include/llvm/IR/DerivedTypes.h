@@ -104,6 +104,7 @@ unsigned Type::getIntegerBitWidth() const {
 ///
 class FunctionType : public Type {
   FunctionType(Type *Result, ArrayRef<Type*> Params, bool IsVarArgs);
+  bool isRawRegion;
 
 public:
   FunctionType(const FunctionType &) = delete;
@@ -147,6 +148,9 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeID() == FunctionTyID;
   }
+
+  void setRaw(bool isRaw) { isRawRegion = isRaw; }
+  bool getRaw() const { return isRawRegion; }
 };
 static_assert(alignof(FunctionType) >= alignof(Type *),
               "Alignment sufficient for objects appended to FunctionType");
@@ -189,6 +193,8 @@ public:
   Value *getCallee() { return Callee; }
 
   explicit operator bool() { return Callee; }
+
+  bool isRaw() const { return FnTy && FnTy->getRaw(); }
 
 private:
   FunctionType *FnTy = nullptr;
