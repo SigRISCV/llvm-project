@@ -5163,6 +5163,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
 
       FunctionType::ExtInfo EI(
           getCCForDeclaratorChunk(S, D, DeclType.getAttrs(), FTI, chunkIndex));
+      EI = EI.withIsRaw(T.isRawQualified());
 
       // OpenCL disallows functions without a prototype, but it doesn't enforce
       // strict prototypes as in C23 because it allows a function definition to

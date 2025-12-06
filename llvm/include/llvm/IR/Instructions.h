@@ -1651,6 +1651,10 @@ public:
     }
   }
 
+  bool isRaw () {
+    return this->FTy->getRaw();
+  }
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Call;
@@ -1679,6 +1683,7 @@ CallInst::CallInst(FunctionType *Ty, Value *Func, ArrayRef<Value *> Args,
   assert(AllocInfo.NumOps ==
          unsigned(Args.size() + CountBundleInputs(Bundles) + 1));
   init(Ty, Func, Args, Bundles, NameStr);
+
 }
 
 //===----------------------------------------------------------------------===//

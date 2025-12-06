@@ -650,6 +650,10 @@ class CGFunctionInfo final
   LLVM_PREFERRED_TYPE(bool)
   unsigned NoCfCheck : 1;
 
+  /// Whether this function is raw function.
+  LLVM_PREFERRED_TYPE(bool)
+  unsigned IsRaw : 1;
+
   /// Log 2 of the maximum vector width.
   unsigned MaxVectorWidth : 4;
 
@@ -731,6 +735,8 @@ public:
 
   bool isNoReturn() const { return NoReturn; }
 
+  bool isRaw() const { return IsRaw; }
+
   /// In ARC, whether this function retains its return value.  This
   /// is not always reliable for call sites.
   bool isReturnsRetained() const { return ReturnsRetained; }
@@ -767,7 +773,7 @@ public:
     return FunctionType::ExtInfo(isNoReturn(), getHasRegParm(), getRegParm(),
                                  getASTCallingConvention(), isReturnsRetained(),
                                  isNoCallerSavedRegs(), isNoCfCheck(),
-                                 isCmseNSCall());
+                                 isCmseNSCall(), isRaw());
   }
 
   CanQualType getReturnType() const { return getArgsBuffer()[0].type; }

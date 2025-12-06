@@ -4917,6 +4917,7 @@ QualType ASTContext::getFunctionTypeInternal(
   // Unique functions, to guarantee there is only one function of a particular
   // structure.
   llvm::FoldingSetNodeID ID;
+  assert(ResultTy.isRawQualified() == EPI.ExtInfo.getIsRaw());
   FunctionProtoType::Profile(ID, ResultTy, ArgArray.begin(), NumArgs, EPI,
                              *this, true);
 
