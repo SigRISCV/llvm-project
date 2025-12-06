@@ -4735,6 +4735,7 @@ public:
     bool IsPatchPoint      : 1;
     bool IsPreallocated : 1;
     bool NoMerge           : 1;
+    bool IsRaw             : 1;
 
     // IsTailCall should be modified by implementations of
     // TargetLowering::LowerCall that perform tail call conversions.
@@ -4762,7 +4763,7 @@ public:
     CallLoweringInfo(SelectionDAG &DAG)
         : RetSExt(false), RetZExt(false), IsVarArg(false), IsInReg(false),
           DoesNotReturn(false), IsReturnValueUsed(true), IsConvergent(false),
-          IsPatchPoint(false), IsPreallocated(false), NoMerge(false),
+          IsPatchPoint(false), IsPreallocated(false), NoMerge(false), IsRaw(false),
           DAG(DAG) {}
 
     CallLoweringInfo &setDebugLoc(const SDLoc &dl) {
@@ -4794,6 +4795,11 @@ public:
 
       DAG.getTargetLoweringInfo().markLibCallAttributes(
           &(DAG.getMachineFunction()), CC, Args);
+      return *this;
+    }
+
+    CallLoweringInfo &setIsRaw(bool isRaw) {
+      this->IsRaw = isRaw;
       return *this;
     }
 
@@ -4836,7 +4842,7 @@ public:
 
       CB = &Call;
 
-      return *this;
+      return setIsRaw(FTy->getRaw());
     }
 
     CallLoweringInfo &setInRegister(bool Value = true) {

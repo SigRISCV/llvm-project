@@ -1,6 +1,10 @@
 // Define SDNode
 def xsig_setrawid : RVSDNode<"XSIG_SETRAWID",
     SDTypeProfile<1, 1, [SDTCisVT<0, i64>, SDTCisVT<1, i64>]>, []>;
+  
+def riscv_rcall     : RVSDNode<"RCALL", SDT_RISCVCall,
+                               [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
+                                SDNPVariadic]>;
 
 let Predicates = [HasVendorXSig] in {
 
@@ -36,9 +40,17 @@ def SETNEWID : RVInstI<0b010, OPC_CUSTOM_2, (outs GPR:$rd),
                        "setnewid", "$rd, $rs1, $imm12">,
                Sched<[WriteIALU, ReadIALU]>;
 
+let isCall = 1, Defs = [X1], isCodeGenOnly = 0, Size = 8, hasSideEffects = 0,
+    mayStore = 0, mayLoad = 0 in
+def PseudoRCALL : Pseudo<(outs), (ins call_symbol:$func), [],
+                        "rcall", "$func">;
+def PseudoRCALLIndirect : Pseudo<(outs), (ins GPRJALR:$rs1), [(riscv_rcall GPRJALR:$rs1)]>,
+                         PseudoInstExpansion<(SWITCHS X1, GPR:$rs1, X0)>;
 
 // Define Pat
 def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
 def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
+def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
 
 }

@@ -55,6 +55,10 @@ public:
   void expandFunctionCall(const MCInst &MI, SmallVectorImpl<char> &CB,
                           SmallVectorImpl<MCFixup> &Fixups,
                           const MCSubtargetInfo &STI) const;
+  
+  void expandFunctionRCall(const MCInst &MI, SmallVectorImpl<char> &CB,
+                          SmallVectorImpl<MCFixup> &Fixups,
+                          const MCSubtargetInfo &STI) const;
 
   void expandTLSDESCCall(const MCInst &MI, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
@@ -197,6 +201,35 @@ void RISCVMCCodeEmitter::expandFunctionCall(const MCInst &MI,
   else
     // Emit JALR Ra, Ra, 0
     TmpInst = MCInstBuilder(RISCV::JALR).addReg(Ra).addReg(Ra).addImm(0);
+  Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
+  support::endian::write(CB, Binary, llvm::endianness::little);
+}
+
+void RISCVMCCodeEmitter::expandFunctionRCall(const MCInst &MI,
+                                            SmallVectorImpl<char> &CB,
+                                            SmallVectorImpl<MCFixup> &Fixups,
+                                            const MCSubtargetInfo &STI) const {
+  MCInst TmpInst;
+  MCOperand Func;
+  MCRegister Ra;
+  Func = MI.getOperand(0);
+  Ra = RISCV::X1;
+
+  uint32_t Binary;
+
+  assert(Func.isExpr() && "Expected expression");
+
+  const MCExpr *CallExpr = Func.getExpr();
+  // Emit AUIPC Ra, Func with R_RISCV_CALL relocation type.
+  TmpInst = MCInstBuilder(RISCV::AUIPC).addReg(Ra).addExpr(CallExpr);
+  Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
+  support::endian::write(CB, Binary, llvm::endianness::little);
+
+  TmpInst = MCInstBuilder(RISCV::ADDI).addReg(Ra).addReg(Ra).addImm(0);
+  Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
+  support::endian::write(CB, Binary, llvm::endianness::little);
+  
+  TmpInst = MCInstBuilder(RISCV::SWITCHS).addReg(Ra).addReg(Ra).addReg(RISCV::X0);
   Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
   support::endian::write(CB, Binary, llvm::endianness::little);
 }
@@ -415,6 +448,10 @@ void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI,
   switch (MI.getOpcode()) {
   default:
     break;
+  case RISCV::PseudoRCALL:
+    expandFunctionRCall(MI, CB, Fixups, STI);
+    MCNumEmitted += 3;
+    return;
   case RISCV::PseudoCALLReg:
   case RISCV::PseudoCALL:
   case RISCV::PseudoTAIL:
