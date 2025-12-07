@@ -145,6 +145,8 @@ public:
     return &TLInfo;
   }
 
+  bool isSigModeSupport() const override { return IsSigMode;}
+
   bool enableMachineScheduler() const override { return true; }
 
   bool enablePostRAScheduler() const override { return UsePostRAScheduler; }

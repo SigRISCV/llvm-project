@@ -85,6 +85,7 @@ public:
   ~TargetSubtargetInfo() override;
 
   virtual bool isXRaySupported() const { return false; }
+  virtual bool isSigModeSupport() const { return false;}
 
   // Interfaces to the major aspects of target machine information:
   //
