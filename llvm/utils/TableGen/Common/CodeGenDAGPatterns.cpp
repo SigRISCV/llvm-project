@@ -1133,6 +1133,12 @@ std::string TreePredicateFn::getPredCode() const {
       if (isZeroExtLoad())
         Code += "if (cast<LoadSDNode>(N)->getExtensionType() != ISD::ZEXTLOAD) "
                 "return false;\n";
+      if (isEncrypted())
+      Code += "if (cast<LoadSDNode>(N)->getEncryptedMode() != ISD::ENCRYPTED) "
+              "return false;\n";
+      if (isNonEncrypted())
+        Code += "if (cast<LoadSDNode>(N)->getEncryptedMode() == ISD::ENCRYPTED) "
+                "return false;\n";
     } else {
       if ((isNonTruncStore() + isTruncStore()) > 1)
         PrintFatalError(
@@ -1144,7 +1150,17 @@ std::string TreePredicateFn::getPredCode() const {
       if (isTruncStore())
         Code +=
             " if (!cast<StoreSDNode>(N)->isTruncatingStore()) return false;\n";
+      if (isEncrypted())
+        Code += 
+            "if (cast<StoreSDNode>(N)->getEncryptedMode() != ISD::ENCRYPTED) "
+              "return false;\n";
+      if (isNonEncrypted())
+        Code += 
+            "if (cast<StoreSDNode>(N)->getEncryptedMode() == ISD::ENCRYPTED) "
+                "return false;\n";
     }
+
+    
 
     if (const Record *ScalarMemoryVT = getScalarMemoryVT())
       Code += ("if (cast<" + SDNodeName +
@@ -1235,6 +1251,12 @@ bool TreePredicateFn::isNonTruncStore() const {
 }
 bool TreePredicateFn::isTruncStore() const {
   return isPredefinedPredicateEqualTo("IsTruncStore", true);
+}
+bool TreePredicateFn::isEncrypted() const {
+  return isPredefinedPredicateEqualTo("IsEncrypted", true);
+}
+bool TreePredicateFn::isNonEncrypted() const {
+  return isPredefinedPredicateEqualTo("IsEncrypted", false);
 }
 bool TreePredicateFn::isAtomicOrderingMonotonic() const {
   return isPredefinedPredicateEqualTo("IsAtomicOrderingMonotonic", true);
@@ -1395,6 +1417,15 @@ std::string TreePredicateFn::getCodeToRunOnSDNode() const {
       PrintFatalError(
           getOrigPatFragRecord()->getRecord()->getLoc(),
           "ScalarMemoryVT cannot be used with ImmLeaf or its subclasses");
+    if (isEncrypted())
+      PrintFatalError(
+          getOrigPatFragRecord()->getRecord()->getLoc(),
+          "IsEncrypted cannot be used with ImmLeaf or its subclasses");
+    if (isNonEncrypted())
+      PrintFatalError(
+          getOrigPatFragRecord()->getRecord()->getLoc(),
+          "IsNonEncrypted cannot be used with ImmLeaf or its subclasses"); 
+
 
     std::string Result = ("    " + getImmType() + " Imm = ").str();
     if (immCodeUsesAPFloat())

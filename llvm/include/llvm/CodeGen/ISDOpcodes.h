@@ -1664,6 +1664,9 @@ enum MemIndexType { SIGNED_SCALED = 0, UNSIGNED_SCALED };
 
 static const int LAST_MEM_INDEX_TYPE = UNSIGNED_SCALED + 1;
 
+enum MemEncryptedMode { UNENCRYPTED = 0, ENCRYPTED = 1 };
+static const int LAST_ENCRYPTED_MODE = ENCRYPTED + 1;
+
 inline bool isIndexTypeSigned(MemIndexType IndexType) {
   return IndexType == SIGNED_SCALED;
 }

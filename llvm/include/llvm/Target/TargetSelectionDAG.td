@@ -1023,6 +1023,10 @@ class PatFrags<dag ops, list<dag> frags, code pred = [{}],
   // cast<StoreSDNode>(N)->isTruncatingStore();
   bit IsTruncStore = ?;
 
+  // cast<LoadSDNode>(N)->getEncryptedMode() == ISD::ENCRYPTED;
+  // cast<StoreSDNode>(N)->getEncryptedMode() == ISD::ENCRYPTED;
+  bit IsEncrypted = ?;
+
   // cast<MemSDNode>(N)->getAddressSpace() ==
   // If this empty, accept any address space.
   list<int> AddressSpaces = ?;
@@ -1209,6 +1213,12 @@ def unindexedload : PatFrag<(ops node:$ptr), (ld node:$ptr)> {
 def load : PatFrag<(ops node:$ptr), (unindexedload node:$ptr)> {
   let IsLoad = true;
   let IsNonExtLoad = true;
+  let IsEncrypted = false;
+}
+def sigload : PatFrag<(ops node:$ptr), (unindexedload node:$ptr)> {
+  let IsLoad = true;
+  let IsNonExtLoad = true;
+  let IsEncrypted = true;
 }
 
 // extending load fragments.
@@ -1373,6 +1383,13 @@ def store : PatFrag<(ops node:$val, node:$ptr),
                     (unindexedstore node:$val, node:$ptr)> {
   let IsStore = true;
   let IsTruncStore = false;
+  let IsEncrypted = false;
+}
+def sigstore : PatFrag<(ops node:$val, node:$ptr),
+                    (unindexedstore node:$val, node:$ptr)> {
+  let IsStore = true;
+  let IsTruncStore = false;
+  let IsEncrypted = true;
 }
 
 // truncstore fragments.

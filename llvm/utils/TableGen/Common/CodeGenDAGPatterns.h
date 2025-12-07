@@ -552,6 +552,10 @@ public:
   bool isNonTruncStore() const;
   /// Is this predicate the predefined truncating store predicate?
   bool isTruncStore() const;
+  /// Is this predicate the predefined encrypted predicate?
+  bool isEncrypted() const;
+  /// Is this predicate the predefined non-encrypted predicate?
+  bool isNonEncrypted() const;
 
   /// Is this predicate the predefined monotonic atomic predicate?
   bool isAtomicOrderingMonotonic() const;
