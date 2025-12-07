@@ -4771,8 +4771,9 @@ CGDebugInfo::getFunctionType(const FunctionDecl *FD, QualType RetTy,
   SmallVector<QualType, 16> ArgTypes;
   for (const VarDecl *VD : Args)
     ArgTypes.push_back(VD->getType());
-  return CGM.getContext().getFunctionType(RetTy, ArgTypes,
-                                          FunctionProtoType::ExtProtoInfo(CC));
+  auto EPI = FunctionProtoType::ExtProtoInfo(CC);
+  EPI.ExtInfo = EPI.ExtInfo.withIsRaw(RetTy.isRawQualified());
+  return CGM.getContext().getFunctionType(RetTy, ArgTypes, EPI);
 }
 
 void CGDebugInfo::emitFunctionStart(GlobalDecl GD, SourceLocation Loc,
