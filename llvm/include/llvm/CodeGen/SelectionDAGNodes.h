@@ -53,6 +53,7 @@
 #include <cstring>
 #include <iterator>
 #include <string>
+#include <sys/types.h>
 #include <tuple>
 #include <utility>
 
@@ -602,6 +603,7 @@ BEGIN_TWO_BYTE_PACK()
 
     uint16_t ExtTy : 2; // enum ISD::LoadExtType
     uint16_t IsExpanding : 1;
+    uint16_t EncryptedMode : 1;
   };
 
   class StoreSDNodeBitfields {
@@ -616,6 +618,7 @@ BEGIN_TWO_BYTE_PACK()
 
     uint16_t IsTruncating : 1;
     uint16_t IsCompressing : 1;
+    uint16_t EncryptedMode : 1;
   };
 
   union {
@@ -2559,6 +2562,10 @@ class LoadSDNode : public LSBaseSDNode {
              MachineMemOperand *MMO)
       : LSBaseSDNode(ISD::LOAD, Order, dl, VTs, AM, MemVT, MMO) {
     LoadSDNodeBits.ExtTy = ETy;
+    LoadSDNodeBits.EncryptedMode = ISD::UNENCRYPTED;
+    if (MMO->isEncrypted()) {
+      LoadSDNodeBits.EncryptedMode = ISD::ENCRYPTED;
+    }
     assert(readMem() && "Load MachineMemOperand is not a load!");
     assert(!writeMem() && "Load MachineMemOperand is a store!");
   }
@@ -2568,6 +2575,10 @@ public:
   /// or one of the varieties of value-extending loads.
   ISD::LoadExtType getExtensionType() const {
     return static_cast<ISD::LoadExtType>(LoadSDNodeBits.ExtTy);
+  }
+
+  ISD::MemEncryptedMode getEncryptedMode() const {
+    return static_cast<ISD::MemEncryptedMode>(LoadSDNodeBits.EncryptedMode);
   }
 
   const SDValue &getBasePtr() const { return getOperand(1); }
@@ -2587,6 +2598,10 @@ class StoreSDNode : public LSBaseSDNode {
               MachineMemOperand *MMO)
       : LSBaseSDNode(ISD::STORE, Order, dl, VTs, AM, MemVT, MMO) {
     StoreSDNodeBits.IsTruncating = isTrunc;
+    StoreSDNodeBits.EncryptedMode = ISD::UNENCRYPTED;
+    if (MMO->isEncrypted()) {
+      StoreSDNodeBits.EncryptedMode = ISD::ENCRYPTED;
+    }
     assert(!readMem() && "Store MachineMemOperand is a load!");
     assert(writeMem() && "Store MachineMemOperand is not a store!");
   }
@@ -2596,6 +2611,10 @@ public:
   /// For integers this is the same as doing a TRUNCATE and storing the result.
   /// For floats, it is the same as doing an FP_ROUND and storing the result.
   bool isTruncatingStore() const { return StoreSDNodeBits.IsTruncating; }
+
+  ISD::MemEncryptedMode getEncryptedMode() const {
+    return static_cast<ISD::MemEncryptedMode>(StoreSDNodeBits.EncryptedMode);
+  }
 
   const SDValue &getValue() const { return getOperand(1); }
   const SDValue &getBasePtr() const { return getOperand(2); }

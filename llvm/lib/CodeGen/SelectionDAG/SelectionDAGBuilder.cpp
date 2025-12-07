@@ -4683,6 +4683,12 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
   bool isVolatile = I.isVolatile();
   MachineMemOperand::Flags MMOFlags =
       TLI.getLoadMemOperandFlags(I, DAG.getDataLayout(), AC, LibInfo);
+  
+  if (DAG.getSubtarget().isSigModeSupport()) {
+    if (SV->getType()->getPointerAddressSpace() == 0 && Ty->isPointerTy()) {
+      MMOFlags |= MachineMemOperand::MOEncrypted;
+    }
+  }
 
   SDValue Root;
   bool ConstantMemory = false;
@@ -4858,6 +4864,13 @@ void SelectionDAGBuilder::visitStore(const StoreInst &I) {
   AAMDNodes AAInfo = I.getAAMetadata();
 
   auto MMOFlags = TLI.getStoreMemOperandFlags(I, DAG.getDataLayout());
+
+  if (DAG.getSubtarget().isSigModeSupport()) {
+    if (PtrV->getType()->getPointerAddressSpace() == 0 &&
+        SrcV->getType()->isPointerTy()) {
+      MMOFlags |= MachineMemOperand::MOEncrypted;
+    }
+  }
 
   unsigned ChainI = 0;
   for (unsigned i = 0; i != NumValues; ++i, ++ChainI) {
