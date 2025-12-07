@@ -1702,6 +1702,7 @@ QualType QualType::getRawChainType(const ASTContext &Ctx) {
           ParamTys.push_back(qual);
         }
         FunctionProtoType::ExtProtoInfo EPI = function->getExtProtoInfo();
+        EPI.ExtInfo = EPI.ExtInfo.withIsRaw(true);
         pointee = Ctx.getFunctionType(rettype, ParamTys, EPI);
       } else {
         pointee = getRawQual(pointee, Ctx);
