@@ -704,7 +704,7 @@ static unsigned selectZalasrLoadStoreOp(unsigned GenericOpc, unsigned OpSize) {
 /// Select the RISC-V regimm opcode for the G_LOAD or G_STORE operation
 /// \p GenericOpc, appropriate for the GPR register bank and of memory access
 /// size \p OpSize. \returns \p GenericOpc if the combination is unsupported.
-static unsigned selectRegImmLoadStoreOp(unsigned GenericOpc, unsigned OpSize) {
+static unsigned selectRegImmLoadStoreOp(unsigned GenericOpc, unsigned OpSize, bool Encrypted) {
   const bool IsStore = GenericOpc == TargetOpcode::G_STORE;
   switch (OpSize) {
   case 8:
@@ -715,7 +715,10 @@ static unsigned selectRegImmLoadStoreOp(unsigned GenericOpc, unsigned OpSize) {
   case 32:
     return IsStore ? RISCV::SW : RISCV::LW;
   case 64:
-    return IsStore ? RISCV::SD : RISCV::LD;
+    return Encrypted ? 
+      IsStore ? RISCV::SS : RISCV::LS 
+    : 
+      IsStore ? RISCV::SD : RISCV::LD;
   }
 
   return GenericOpc;
@@ -1215,7 +1218,7 @@ bool RISCVInstructionSelector::select(MachineInstr &MI) {
       return constrainSelectedInstRegOperands(MI, TII, TRI, RBI);
     }
 
-    const unsigned NewOpc = selectRegImmLoadStoreOp(MI.getOpcode(), MemSize);
+    const unsigned NewOpc = selectRegImmLoadStoreOp(MI.getOpcode(), MemSize, STI.isSigModeSupport());
     if (NewOpc == MI.getOpcode())
       return false;
 
