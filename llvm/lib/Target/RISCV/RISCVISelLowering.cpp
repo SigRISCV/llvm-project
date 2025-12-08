@@ -9111,8 +9111,12 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
     // Use PC-relative addressing to access the GOT for this symbol, then load
     // the address from the GOT. This generates the pattern (PseudoLGA sym),
     // which expands to (ld (addi (auipc %got_pcrel_hi(sym)) %pcrel_lo(auipc))).
+    unsigned int opcode = RISCV::PseudoLGA;
+    if (Subtarget.isSigModeSupport()) {
+      opcode = RISCV::PseudoLSGA;
+    } 
     SDValue Load =
-        SDValue(DAG.getMachineNode(RISCV::PseudoLGA, DL, Ty, Addr), 0);
+        SDValue(DAG.getMachineNode(opcode, DL, Ty, Addr), 0);
     MachineFunction &MF = DAG.getMachineFunction();
     MachineMemOperand *MemOp = MF.getMachineMemOperand(
         MachinePointerInfo::getGOT(MF),
@@ -9149,8 +9153,12 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
       // not be within 2GiB of PC, so use GOT-indirect addressing to access the
       // symbol. This generates the pattern (PseudoLGA sym), which expands to
       // (ld (addi (auipc %got_pcrel_hi(sym)) %pcrel_lo(auipc))).
+      unsigned int opcode = RISCV::PseudoLGA;
+      if (Subtarget.isSigModeSupport()) {
+        opcode = RISCV::PseudoLSGA;
+      } 
       SDValue Load =
-          SDValue(DAG.getMachineNode(RISCV::PseudoLGA, DL, Ty, Addr), 0);
+          SDValue(DAG.getMachineNode(opcode, DL, Ty, Addr), 0);
       MachineFunction &MF = DAG.getMachineFunction();
       MachineMemOperand *MemOp = MF.getMachineMemOperand(
           MachinePointerInfo::getGOT(MF),

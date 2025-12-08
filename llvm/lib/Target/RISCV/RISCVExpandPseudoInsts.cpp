@@ -590,6 +590,9 @@ private:
   bool expandLoadGlobalAddress(MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator MBBI,
                                MachineBasicBlock::iterator &NextMBBI);
+  bool expandLoadSigGlobalAddress(MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator MBBI,
+                               MachineBasicBlock::iterator &NextMBBI);
   bool expandLoadTLSIEAddress(MachineBasicBlock &MBB,
                               MachineBasicBlock::iterator MBBI,
                               MachineBasicBlock::iterator &NextMBBI);
@@ -654,6 +657,8 @@ bool RISCVPreRAExpandPseudo::expandMI(MachineBasicBlock &MBB,
     return expandLoadLocalAddress(MBB, MBBI, NextMBBI);
   case RISCV::PseudoLGA:
     return expandLoadGlobalAddress(MBB, MBBI, NextMBBI);
+  case RISCV::PseudoLSGA:
+    return expandLoadSigGlobalAddress(MBB, MBBI, NextMBBI);
   case RISCV::PseudoLA_TLS_IE:
     return expandLoadTLSIEAddress(MBB, MBBI, NextMBBI);
   case RISCV::PseudoLA_TLS_GD:
@@ -707,6 +712,15 @@ bool RISCVPreRAExpandPseudo::expandLoadGlobalAddress(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
     MachineBasicBlock::iterator &NextMBBI) {
   unsigned SecondOpcode = STI->is64Bit() ? RISCV::LD : RISCV::LW;
+  return expandAuipcInstPair(MBB, MBBI, NextMBBI, RISCVII::MO_GOT_HI,
+                             SecondOpcode);
+}
+
+bool RISCVPreRAExpandPseudo::expandLoadSigGlobalAddress(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+    MachineBasicBlock::iterator &NextMBBI) {
+  assert(STI->is64Bit());
+  unsigned SecondOpcode = RISCV::LS;
   return expandAuipcInstPair(MBB, MBBI, NextMBBI, RISCVII::MO_GOT_HI,
                              SecondOpcode);
 }

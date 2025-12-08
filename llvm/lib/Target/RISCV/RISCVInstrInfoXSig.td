@@ -60,6 +60,10 @@ def PseudoRCALL : Pseudo<(outs), (ins call_symbol:$func), [],
                         "rcall", "$func">;
 def PseudoRCALLIndirect : Pseudo<(outs), (ins GPRJALR:$rs1), [(riscv_rcall GPRJALR:$rs1)]>,
                          PseudoInstExpansion<(SWITCHS X1, GPR:$rs1, X0)>;
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 0,
+    isAsmParserOnly = 1 in
+def PseudoLSGA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
+                       "lsga", "$dst, $src">;
 
 // Define Pat
 def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
