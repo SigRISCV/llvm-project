@@ -646,8 +646,15 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
 
   unsigned Opcode;
   if (RISCV::GPRRegClass.hasSubClassEq(RC)) {
-    Opcode = RegInfo.getRegSizeInBits(RISCV::GPRRegClass) == 32 ? RISCV::SW
-                                                                : RISCV::SD;
+    if (RegInfo.getRegSizeInBits(RISCV::GPRRegClass) == 32) {
+      Opcode = RISCV::SW;
+    } else if (!STI.isSigModeSupport()) {
+      Opcode = RISCV::SD;
+    } else if (Flags & MachineInstr::FrameSetup) {
+      Opcode = RISCV::SS_ID;
+    } else {
+      Opcode = RISCV::SS;
+    }
   } else if (RISCV::GPRF16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::SH_INX;
   } else if (RISCV::GPRF32RegClass.hasSubClassEq(RC)) {
@@ -732,8 +739,15 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
 
   unsigned Opcode;
   if (RISCV::GPRRegClass.hasSubClassEq(RC)) {
-    Opcode = RegInfo.getRegSizeInBits(RISCV::GPRRegClass) == 32 ? RISCV::LW
-                                                                : RISCV::LD;
+    if (RegInfo.getRegSizeInBits(RISCV::GPRRegClass) == 32) {
+      Opcode = RISCV::LW;
+    } else if (!STI.isSigModeSupport()) {
+      Opcode = RISCV::LD;
+    } else if (Flags & MachineInstr::FrameDestroy) {
+      Opcode = RISCV::LS_MAP;
+    } else {
+      Opcode = RISCV::LS;
+    }
   } else if (RISCV::GPRF16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::LH_INX;
   } else if (RISCV::GPRF32RegClass.hasSubClassEq(RC)) {
