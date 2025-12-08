@@ -579,4 +579,21 @@ def : SysReg<"mkeyh", 0x7F1>;
 //===--------------------------
 def : SysReg<"skeyl", 0x5F0>;
 def : SysReg<"skeyh", 0x5F1>;
+
+//===--------------------------
+// GPR Shadow ID Registers (x0-x31)
+//===--------------------------
+// GPRID0-GPRID31 at 0x5D0-0x5EF (S-mode)
+foreach i = 0...31 in
+  def : SysReg<"gprid"#i, !add(0x5D0, i)>;
+
+//===--------------------------
+// Program Counter ID Register
+//===--------------------------
+def : SysReg<"pcid", 0x5F2>;
+
+//===--------------------------
+// ID Control and Status Register
+//===--------------------------
+def : SysReg<"idcsr", 0x5F3>;
 }
