@@ -1760,6 +1760,7 @@ public:
 
   using FunctionTypeSet = DenseSet<FunctionType *, FunctionTypeKeyInfo>;
   FunctionTypeSet FunctionTypes;
+  FunctionTypeSet RawFunctionTypes;
   using StructTypeSet = DenseSet<StructType *, AnonStructTypeKeyInfo>;
   StructTypeSet AnonStructTypes;
   StringMap<StructType *> NamedStructTypes;

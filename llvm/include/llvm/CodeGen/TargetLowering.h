@@ -4842,7 +4842,8 @@ public:
 
       CB = &Call;
 
-      return setIsRaw(FTy->getRaw());
+      IsRaw = FTy->getRaw();
+      return *this;
     }
 
     CallLoweringInfo &setInRegister(bool Value = true) {

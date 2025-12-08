@@ -112,7 +112,7 @@ public:
 
   /// This static method is the primary way of constructing a FunctionType.
   LLVM_ABI static FunctionType *get(Type *Result, ArrayRef<Type *> Params,
-                                    bool isVarArg);
+                                    bool isVarArg, bool isRaw=false);
 
   /// Create a FunctionType taking no parameters.
   LLVM_ABI static FunctionType *get(Type *Result, bool isVarArg);
