@@ -366,7 +366,7 @@ FunctionType::FunctionType(Type *Result, ArrayRef<Type*> Params,
 
 // This is the factory function for the FunctionType class.
 FunctionType *FunctionType::get(Type *ReturnType,
-                                ArrayRef<Type*> Params, bool isVarArg) {
+                                ArrayRef<Type*> Params, bool isVarArg, bool isRaw) {
   LLVMContextImpl *pImpl = ReturnType->getContext().pImpl;
   const FunctionTypeKeyInfo::KeyTy Key(ReturnType, Params, isVarArg);
   FunctionType *FT;
@@ -374,8 +374,10 @@ FunctionType *FunctionType::get(Type *ReturnType,
   // and we don't want to perform two lookups (one for checking if existent and
   // one for inserting the newly allocated one), here we instead lookup based on
   // Key and update the reference to the function type in-place to a newly
-  // allocated one if not found.
-  auto Insertion = pImpl->FunctionTypes.insert_as(nullptr, Key);
+  // allocated one if not found
+                                  
+  auto Insertion = isRaw ? pImpl->RawFunctionTypes.insert_as(nullptr, Key) 
+    : pImpl->FunctionTypes.insert_as(nullptr, Key);
   if (Insertion.second) {
     // The function type was not found. Allocate one and update FunctionTypes
     // in-place.
@@ -388,6 +390,9 @@ FunctionType *FunctionType::get(Type *ReturnType,
     // The function type was found. Just return it.
     FT = *Insertion.first;
   }
+
+  FT->setRaw(isRaw);
+
   return FT;
 }
 

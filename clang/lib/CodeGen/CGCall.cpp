@@ -1827,8 +1827,7 @@ llvm::FunctionType *CodeGenTypes::GetFunctionType(const CGFunctionInfo &FI) {
   (void)Erased;
   assert(Erased && "Not in set?");
 
-  auto result = llvm::FunctionType::get(resultType, ArgTypes, FI.isVariadic());
-  result->setRaw(FI.isRaw());
+  auto result = llvm::FunctionType::get(resultType, ArgTypes, FI.isVariadic(), FI.isRaw());
   return result;
 }
 
