@@ -20,6 +20,20 @@ def SS : RVInstS<0b100, OPC_CUSTOM_2, (outs),
                  "ss", "$rs2, ${imm12}(${rs1})">,
          Sched<[WriteSTD, ReadStoreData, ReadMemBase]>;
 
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in
+def LS_MAP : RVInstI<0b101, OPC_CUSTOM_2, (outs GPR:$rd), (ins GPRMem:$rs1, simm12_lo:$imm12),
+                 "ls.map", "$rd, ${imm12}(${rs1})">,
+         Sched<[WriteLDW, ReadMemBase]>;
+
+let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in
+def SS_ID : RVInstS<0b110, OPC_CUSTOM_2, (outs),
+                 (ins GPR:$rs2, GPRMem:$rs1, simm12_lo:$imm12),
+                 "ss.id", "$rs2, ${imm12}(${rs1})">,
+         Sched<[WriteSTD, ReadStoreData, ReadMemBase]>;
+
+def : InstAlias<"ss.encmap ${imm12}(${rs1})", (SS_ID X0, GPRMem:$rs1, simm12_lo:$imm12)>;
+def : InstAlias<"ls.encmap ${imm12}(${rs1})", (LS_MAP X0, GPRMem:$rs1, simm12_lo:$imm12)>;
+
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
 def SETRAWID : RVInstI<0b000, OPC_CUSTOM_2, (outs GPR:$rd),
                      (ins GPR:$rs1, simm12_lo:$imm12),
