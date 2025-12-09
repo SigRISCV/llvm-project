@@ -19,4 +19,16 @@ def int_riscv_xsig_setrawid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem
 def int_riscv_xsig_setnewid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem, IntrWillReturn]>,
   ClangBuiltin<"__builtin_riscv_xsig_setnewid">;
 
+def int_riscv_xsig_sigload : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWillReturn, IntrReadMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_sigload">;
+
+def int_riscv_xsig_sigstore : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty], [IntrWriteMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_sigstore">;
+
+def int_riscv_xsig_dynsigload : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWillReturn, IntrReadMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_dynsigload">;
+
+def int_riscv_xsig_dynsigstore : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty], [IntrWriteMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_dynsigstore">;
+
 } // TargetPrefix = "riscv"
