@@ -1139,6 +1139,12 @@ std::string TreePredicateFn::getPredCode() const {
       if (isNonEncrypted())
         Code += "if (cast<LoadSDNode>(N)->getEncryptedMode() == ISD::ENCRYPTED) "
                 "return false;\n";
+      if (isDynEncrypted())
+      Code += "if (cast<LoadSDNode>(N)->getEncryptedMode() != ISD::DYNENCRYPTED) "
+              "return false;\n";
+      if (isNonDynEncrypted())
+        Code += "if (cast<LoadSDNode>(N)->getEncryptedMode() == ISD::DYNENCRYPTED) "
+                "return false;\n";
     } else {
       if ((isNonTruncStore() + isTruncStore()) > 1)
         PrintFatalError(
@@ -1157,6 +1163,14 @@ std::string TreePredicateFn::getPredCode() const {
       if (isNonEncrypted())
         Code += 
             "if (cast<StoreSDNode>(N)->getEncryptedMode() == ISD::ENCRYPTED) "
+                "return false;\n";
+      if (isDynEncrypted())
+        Code += 
+            "if (cast<StoreSDNode>(N)->getEncryptedMode() != ISD::DYNENCRYPTED) "
+              "return false;\n";
+      if (isNonDynEncrypted())
+        Code += 
+            "if (cast<StoreSDNode>(N)->getEncryptedMode() == ISD::DYNENCRYPTED) "
                 "return false;\n";
     }
 
@@ -1257,6 +1271,12 @@ bool TreePredicateFn::isEncrypted() const {
 }
 bool TreePredicateFn::isNonEncrypted() const {
   return isPredefinedPredicateEqualTo("IsEncrypted", false);
+}
+bool TreePredicateFn::isDynEncrypted() const {
+  return isPredefinedPredicateEqualTo("IsDynEncrypted", true);
+}
+bool TreePredicateFn::isNonDynEncrypted() const {
+  return isPredefinedPredicateEqualTo("IsDynEncrypted", false);
 }
 bool TreePredicateFn::isAtomicOrderingMonotonic() const {
   return isPredefinedPredicateEqualTo("IsAtomicOrderingMonotonic", true);
@@ -1425,6 +1445,14 @@ std::string TreePredicateFn::getCodeToRunOnSDNode() const {
       PrintFatalError(
           getOrigPatFragRecord()->getRecord()->getLoc(),
           "IsNonEncrypted cannot be used with ImmLeaf or its subclasses"); 
+    if (isDynEncrypted())
+      PrintFatalError(
+          getOrigPatFragRecord()->getRecord()->getLoc(),
+          "IsDynEncrypted cannot be used with ImmLeaf or its subclasses");
+    if (isNonDynEncrypted())
+      PrintFatalError(
+          getOrigPatFragRecord()->getRecord()->getLoc(),
+          "IsNonDynEncrypted cannot be used with ImmLeaf or its subclasses"); 
 
 
     std::string Result = ("    " + getImmType() + " Imm = ").str();

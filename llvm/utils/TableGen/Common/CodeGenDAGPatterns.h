@@ -556,6 +556,10 @@ public:
   bool isEncrypted() const;
   /// Is this predicate the predefined non-encrypted predicate?
   bool isNonEncrypted() const;
+  /// Is this predicate the predefined dynamic encrypted predicate?
+  bool isDynEncrypted() const;
+  /// Is this predicate the predefined dynamic non-encrypted predicate?
+  bool isNonDynEncrypted() const;
 
   /// Is this predicate the predefined monotonic atomic predicate?
   bool isAtomicOrderingMonotonic() const;

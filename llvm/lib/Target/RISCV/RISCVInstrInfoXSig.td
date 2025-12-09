@@ -72,4 +72,6 @@ def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
 def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
 def : LdPat<sigload, LS, i64>;
 def : StPat<sigstore, SS, GPR, i64>;
+def : LdPat<dynsigload, LS_MAP, i64>;
+def : StPat<dynsigstore, SS_ID, GPR, i64>;
 }

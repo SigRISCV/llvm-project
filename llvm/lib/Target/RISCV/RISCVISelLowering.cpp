@@ -23833,9 +23833,11 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
                       DAG.getIntPtrConstant(VA.getLocMemOffset(), DL));
 
       // Emit the store.
+      DEBUG_FILE;
       MemOpChains.push_back(
           DAG.getStore(Chain, DL, ArgValue, Address,
-                       MachinePointerInfo::getStack(MF, VA.getLocMemOffset())));
+                      MachinePointerInfo::getStack(MF, VA.getLocMemOffset()),
+                      MaybeAlign(), MachineMemOperand::MODynEncrypted));
     }
   }
 

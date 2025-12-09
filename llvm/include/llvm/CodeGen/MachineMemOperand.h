@@ -155,8 +155,9 @@ public:
     MOTargetFlag3 = 1u << 8,
     MOTargetFlag4 = 1u << 9,
     MOEncrypted = 1u << 10,
+    MODynEncrypted = 1u << 11,
 
-    LLVM_MARK_AS_BITMASK_ENUM(/* LargestFlag = */ MOEncrypted)
+    LLVM_MARK_AS_BITMASK_ENUM(/* LargestFlag = */ MODynEncrypted)
   };
 
 private:
@@ -304,6 +305,7 @@ public:
   bool isDereferenceable() const { return FlagVals & MODereferenceable; }
   bool isInvariant() const { return FlagVals & MOInvariant; }
   bool isEncrypted() const { return FlagVals & MOEncrypted; }
+  bool isDynEncrypted() const { return FlagVals & MODynEncrypted; }
 
   /// Returns true if this operation has an atomic ordering requirement of
   /// unordered or higher, false otherwise.

@@ -603,7 +603,7 @@ BEGIN_TWO_BYTE_PACK()
 
     uint16_t ExtTy : 2; // enum ISD::LoadExtType
     uint16_t IsExpanding : 1;
-    uint16_t EncryptedMode : 1;
+    uint16_t EncryptedMode : 2;
   };
 
   class StoreSDNodeBitfields {
@@ -618,7 +618,7 @@ BEGIN_TWO_BYTE_PACK()
 
     uint16_t IsTruncating : 1;
     uint16_t IsCompressing : 1;
-    uint16_t EncryptedMode : 1;
+    uint16_t EncryptedMode : 2;
   };
 
   union {
@@ -2563,7 +2563,9 @@ class LoadSDNode : public LSBaseSDNode {
       : LSBaseSDNode(ISD::LOAD, Order, dl, VTs, AM, MemVT, MMO) {
     LoadSDNodeBits.ExtTy = ETy;
     LoadSDNodeBits.EncryptedMode = ISD::UNENCRYPTED;
-    if (MMO->isEncrypted()) {
+    if (MMO->isDynEncrypted()) {
+      LoadSDNodeBits.EncryptedMode = ISD::DYNENCRYPTED;
+    } else if (MMO->isEncrypted()) {
       LoadSDNodeBits.EncryptedMode = ISD::ENCRYPTED;
     }
     assert(readMem() && "Load MachineMemOperand is not a load!");
@@ -2599,7 +2601,9 @@ class StoreSDNode : public LSBaseSDNode {
       : LSBaseSDNode(ISD::STORE, Order, dl, VTs, AM, MemVT, MMO) {
     StoreSDNodeBits.IsTruncating = isTrunc;
     StoreSDNodeBits.EncryptedMode = ISD::UNENCRYPTED;
-    if (MMO->isEncrypted()) {
+    if (MMO->isDynEncrypted()) {
+      StoreSDNodeBits.EncryptedMode = ISD::DYNENCRYPTED;
+    } else if (MMO->isEncrypted()) {
       StoreSDNodeBits.EncryptedMode = ISD::ENCRYPTED;
     }
     assert(!readMem() && "Store MachineMemOperand is a load!");
