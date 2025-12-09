@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 
 namespace llvm {
 
@@ -55,6 +56,8 @@ private:
   int MoveF64FrameIndex = -1;
   /// FrameIndex of the spill slot for the scratch register in BranchRelaxation.
   int BranchRelaxationScratchFrameIndex = -1;
+  /// FrameIndex for storing zero value (SigMode extension)
+  int EncMapFrameIndex = -1;
   /// Size of any opaque stack adjustment due to save/restore libcalls.
   unsigned LibCallStackSize = 0;
   /// Size of RVV stack.
@@ -113,6 +116,21 @@ public:
   void setBranchRelaxationScratchFrameIndex(int Index) {
     BranchRelaxationScratchFrameIndex = Index;
   }
+
+  // SigMode: Get or create frame index for zero slot
+  int allocEncMapFrameIndex(MachineFunction &MF) {
+    assert(EncMapFrameIndex == -1);
+    MachineFrameInfo &MFI = MF.getFrameInfo();
+    const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
+    const TargetRegisterClass& RC = RISCV::GPRRegClass;
+    unsigned Size = RegInfo->getSpillSize(RC);
+    Align Alignment = RegInfo->getSpillAlign(RC);
+    EncMapFrameIndex =
+          MFI.CreateStackObject(Size, Alignment, false);
+    return EncMapFrameIndex;
+  }
+  int getEncMapFrameIndex() const { return EncMapFrameIndex; }
+  bool hasEncMapFrameIndex() const { return EncMapFrameIndex != -1; }
 
   unsigned getReservedSpillsSize() const {
     return LibCallStackSize + RVPushStackSize + QCIInterruptStackSize;
