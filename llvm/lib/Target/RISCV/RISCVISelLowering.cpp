@@ -45,6 +45,7 @@
 #include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCInstBuilder.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -23539,6 +23540,10 @@ SDValue RISCVTargetLowering::LowerFormalArguments(
 
       SDValue FIN = DAG.getFrameIndex(FI, PtrVT);
 
+      MachineMemOperand::Flags MMOFlags = MachineMemOperand::MONone;
+      if (Subtarget.isSigModeSupport()) {
+        MMOFlags = MachineMemOperand::MODynEncrypted;
+      }
       // Copy the integer registers that may have been used for passing varargs
       // to the vararg save area.
       for (unsigned I = Idx; I < ArgRegs.size(); ++I) {
@@ -23547,7 +23552,8 @@ SDValue RISCVTargetLowering::LowerFormalArguments(
         SDValue ArgValue = DAG.getCopyFromReg(Chain, DL, Reg, XLenVT);
         SDValue Store = DAG.getStore(
             Chain, DL, ArgValue, FIN,
-            MachinePointerInfo::getFixedStack(MF, FI, (I - Idx) * XLenInBytes));
+            MachinePointerInfo::getFixedStack(MF, FI, (I - Idx) * XLenInBytes),
+            MaybeAlign(), MMOFlags);
         OutChains.push_back(Store);
         FIN =
             DAG.getMemBasePlusOffset(FIN, TypeSize::getFixed(XLenInBytes), DL);
