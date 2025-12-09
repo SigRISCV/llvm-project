@@ -2771,23 +2771,33 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
 
     // First, convert to the correct width so that we control the kind of
     // extension.
+
     auto DestLLVMTy = ConvertType(DestTy);
     llvm::Type *MiddleTy = CGF.CGM.getDataLayout().getIntPtrType(DestLLVMTy);
     bool InputSigned = E->getType()->isSignedIntegerOrEnumerationType();
     llvm::Value* IntResult =
       Builder.CreateIntCast(Src, MiddleTy, InputSigned, "conv");
 
-    auto *IntToPtr = Builder.CreateIntToPtr(IntResult, DestLLVMTy);
+    
+    if (CGF.getContext().getTargetInfo().isSigModeSupported()) {
+      const PointerType* PT = DestTy->getAs<PointerType>();
+      if (!PT->isPointeeRaw()) {
+        QualType raw_pointer_type = DestTy.getRawChainType(CGF.getContext());
+        auto RawPointerTy = ConvertType(raw_pointer_type);
+        IntResult = Builder.CreateIntToPtr(IntResult, RawPointerTy);
+        IntResult = Builder.CreateAddrSpaceCast(IntResult, DestLLVMTy);
+      }
+    }
 
     if (CGF.CGM.getCodeGenOpts().StrictVTablePointers) {
       // Going from integer to pointer that could be dynamic requires reloading
       // dynamic information from invariant.group.
       if (DestTy.mayBeDynamicClass())
-        IntToPtr = Builder.CreateLaunderInvariantGroup(IntToPtr);
+        IntResult = Builder.CreateLaunderInvariantGroup(IntResult);
     }
 
-    IntToPtr = CGF.authPointerToPointerCast(IntToPtr, E->getType(), DestTy);
-    return IntToPtr;
+    IntResult = CGF.authPointerToPointerCast(IntResult, E->getType(), DestTy);
+    return IntResult;
   }
   case CK_PointerToIntegral: {
     assert(!DestTy->isBooleanType() && "bool should use PointerToBool");
