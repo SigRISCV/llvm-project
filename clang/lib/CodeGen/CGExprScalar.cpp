@@ -2786,7 +2786,13 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
         auto RawPointerTy = ConvertType(raw_pointer_type);
         IntResult = Builder.CreateIntToPtr(IntResult, RawPointerTy);
         IntResult = Builder.CreateAddrSpaceCast(IntResult, DestLLVMTy);
+      } else {
+        // For raw pointers or when condition not met, do normal IntToPtr
+        IntResult = Builder.CreateIntToPtr(IntResult, DestLLVMTy);
       }
+    } else {
+      // When SigMode is not supported, do normal IntToPtr
+      IntResult = Builder.CreateIntToPtr(IntResult, DestLLVMTy);
     }
 
     if (CGF.CGM.getCodeGenOpts().StrictVTablePointers) {
