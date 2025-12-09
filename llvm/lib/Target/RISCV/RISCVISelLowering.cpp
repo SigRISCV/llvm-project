@@ -30,6 +30,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SDPatternMatch.h"
 #include "llvm/CodeGen/SelectionDAGAddressAnalysis.h"
@@ -23833,11 +23834,14 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
                       DAG.getIntPtrConstant(VA.getLocMemOffset(), DL));
 
       // Emit the store.
-      DEBUG_FILE;
+      MachineMemOperand::Flags MMOFlags = MachineMemOperand::MONone;
+      if (Subtarget.isSigModeSupport()) {
+        MMOFlags = MachineMemOperand::MODynEncrypted;
+      }
       MemOpChains.push_back(
           DAG.getStore(Chain, DL, ArgValue, Address,
                       MachinePointerInfo::getStack(MF, VA.getLocMemOffset()),
-                      MaybeAlign(), MachineMemOperand::MODynEncrypted));
+                      MaybeAlign(), MMOFlags));
     }
   }
 
