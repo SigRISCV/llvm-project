@@ -5533,6 +5533,38 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
           V = Builder.CreateLoad(
               I->hasLValue() ? I->getKnownLValue().getAddress()
                              : I->getKnownRValue().getAggregateAddress());
+        
+        // this addrspace is used for variadic arguments
+        // other function can set raw attribute to arg kind
+        // so pointers can do addrspace cast based on type automatically
+        // variadic function do not have raw attribute
+        // so we use this logic to do addrspace cast for variadic pointer args
+        if (getContext().getTargetInfo().isSigModeSupported()) {
+          if (V->getType()->isPointerTy() && I->Ty->isPointerType()) {
+            QualType PointeeType =  I->Ty.getTypePtr()->getAs<PointerType>()->getPointeeType();
+            LangAS CurrentLangAS = PointeeType.getAddressSpaceUnderSigMode();
+            unsigned CurrentAS = getContext().getTargetAddressSpace(CurrentLangAS);
+            bool IsRawFunc = CallInfo.isRaw();
+            
+            // for sig func, if pointer is in sigmode_raw, we need to cast it to default
+            // for non-sig func, if pointer is in default, we need to cast it
+            unsigned TargetAS = CurrentAS;
+            if (!IsRawFunc && CurrentAS == 100) {
+              TargetAS = 0;  // sigmode_raw -> default
+            } else if (IsRawFunc && CurrentAS == 0) {
+              TargetAS = 100;  // default -> sigmode_raw
+            }
+            
+            // build addrspace cast if needed
+            if (TargetAS != CurrentAS) {
+              assert(CallInfo.isVariadic());
+              llvm::Type *TargetPtrTy = llvm::PointerType::get(
+                  CGM.getLLVMContext(), TargetAS);
+              V = Builder.CreateAddrSpaceCast(V, TargetPtrTy, 
+                  "sigmode.variadic.cast");
+            }
+          }
+        }
 
         // Implement swifterror by copying into a new swifterror argument.
         // We'll write back in the normal path out of the call.
