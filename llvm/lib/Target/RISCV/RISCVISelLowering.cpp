@@ -9833,9 +9833,13 @@ SDValue RISCVTargetLowering::lowerVASTART(SDValue Op, SelectionDAG &DAG) const {
 
   // vastart just stores the address of the VarArgsFrameIndex slot into the
   // memory location argument.
+  MachineMemOperand::Flags MMOFlags = MachineMemOperand::MONone;
+  if (Subtarget.isSigModeSupport()) {
+    MMOFlags = MachineMemOperand::MOEncrypted;
+  }
   const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
   return DAG.getStore(Op.getOperand(0), DL, FI, Op.getOperand(1),
-                      MachinePointerInfo(SV));
+                      MachinePointerInfo(SV), MaybeAlign(), MMOFlags);
 }
 
 SDValue RISCVTargetLowering::lowerFRAMEADDR(SDValue Op,
