@@ -13,6 +13,7 @@
 #include "RISCVFrameLowering.h"
 #include "MCTargetDesc/RISCVBaseInfo.h"
 #include "RISCVMachineFunctionInfo.h"
+#include "RISCVRegisterInfo.h"
 #include "RISCVSubtarget.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
@@ -2031,6 +2032,25 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
   MachineFrameInfo &MFI = MF.getFrameInfo();
   const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
 
+  int GPRnum = 0;
+  for (auto &CS : CSI) {
+    MCRegister Reg = CS.getReg();
+    if (!RISCV::GPRRegClass.contains(Reg)) {
+      continue;
+    }
+    if (Reg == RAReg) {
+      continue;
+    }
+    if (hasFP(MF) && Reg == FPReg) {
+      continue;
+    }
+    GPRnum++;
+  }
+
+  if (STI.isSigModeSupport() && GPRnum > 0) {
+    RVFI->allocEncMapFrameIndex(MF);
+  }
+
   for (auto &CS : CSI) {
     MCRegister Reg = CS.getReg();
     const TargetRegisterClass *RC = RegInfo->getMinimalPhysRegClass(Reg);
@@ -2182,6 +2202,15 @@ bool RISCVFrameLowering::spillCalleeSavedRegisters(
   storeRegsToStackSlots(UnmanagedCSI);
   storeRegsToStackSlots(RVVCSI);
 
+  // SigMode: Store zero to the zero slot in prologue for raw functions
+  if (RVFI->hasEncMapFrameIndex()) {
+    int EncMapFI = RVFI->getEncMapFrameIndex();
+    // Store X0 (zero) to the zero slot using SD/SS instruction
+    TII.storeRegToStackSlot(MBB, MI, RISCV::X0, true, EncMapFI,
+                            &RISCV::GPRRegClass, Register(),
+                            MachineInstr::FrameSetup);
+  }
+
   return true;
 }
 
@@ -2258,6 +2287,19 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
   // the opportunity to avoid the load-to-use data hazard between
   // loading RA and return by RA.  loadRegFromStackSlot can insert
   // multiple instructions.
+  RISCVMachineFunctionInfo *RVFI = MF->getInfo<RISCVMachineFunctionInfo>();
+
+  // SigMode: Load from zero slot in epilogue for raw functions
+  // This reads back the stored zero value (triggers LS instruction)
+  if (RVFI->hasEncMapFrameIndex()) {
+    int ZeroFI = RVFI->getEncMapFrameIndex();
+    // Load into X0 from the zero slot - the value is discarded but
+    // this generates the LS instruction we need
+    TII.loadRegFromStackSlot(MBB, MI, RISCV::X0, ZeroFI,
+                             &RISCV::GPRRegClass, Register(),
+                             MachineInstr::FrameDestroy);
+  }
+
   const auto &UnmanagedCSI = getUnmanagedCSI(*MF, CSI);
   const auto &RVVCSI = getRVVCalleeSavedInfo(*MF, CSI);
 
@@ -2274,7 +2316,6 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
   loadRegFromStackSlot(RVVCSI);
   loadRegFromStackSlot(UnmanagedCSI);
 
-  RISCVMachineFunctionInfo *RVFI = MF->getInfo<RISCVMachineFunctionInfo>();
   if (RVFI->useQCIInterrupt(*MF)) {
     // Don't emit anything here because restoration is handled by
     // QC.C.MILEAVERET which we already inserted to return.
