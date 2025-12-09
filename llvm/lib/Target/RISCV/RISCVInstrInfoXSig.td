@@ -1,6 +1,9 @@
 // Define SDNode
 def xsig_setrawid : RVSDNode<"XSIG_SETRAWID",
     SDTypeProfile<1, 1, [SDTCisVT<0, i64>, SDTCisVT<1, i64>]>, []>;
+
+def xsig_setnewid : RVSDNode<"XSIG_SETNEWID",
+    SDTypeProfile<1, 1, [SDTCisVT<0, i64>, SDTCisVT<1, i64>]>, []>;
   
 def riscv_rcall     : RVSDNode<"RCALL", SDT_RISCVCall,
                                [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
@@ -68,6 +71,8 @@ def PseudoLSGA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
 // Define Pat
 def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
 def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(xsig_setnewid GPR:$rs1), (SETNEWID GPR:$rs1, 0)>;
+def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (SETNEWID GPR:$rs1, simm12_lo:$imm12)>;
 def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
 def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
 def : LdPat<sigload, LS, i64>;

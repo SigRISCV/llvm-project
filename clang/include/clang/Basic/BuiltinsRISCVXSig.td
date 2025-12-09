@@ -23,4 +23,5 @@ let Attributes = [NoThrow, Const] in {
 //===----------------------------------------------------------------------===//
 
 def setrawid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
+def setnewid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
 } // Attributes = [NoThrow, Const]

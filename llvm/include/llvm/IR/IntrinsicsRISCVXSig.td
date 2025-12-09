@@ -16,4 +16,7 @@ let TargetPrefix = "riscv" in {
 def int_riscv_xsig_setrawid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem, IntrWillReturn]>,
   ClangBuiltin<"__builtin_riscv_xsig_setrawid">;
 
+def int_riscv_xsig_setnewid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem, IntrWillReturn]>,
+  ClangBuiltin<"__builtin_riscv_xsig_setnewid">;
+
 } // TargetPrefix = "riscv"
