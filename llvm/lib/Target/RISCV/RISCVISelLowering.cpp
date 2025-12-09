@@ -34,6 +34,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SDPatternMatch.h"
 #include "llvm/CodeGen/SelectionDAGAddressAnalysis.h"
+#include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/ValueTypes.h"
@@ -1755,8 +1756,12 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::STORE, MVT::bf16, Custom);
   }
 
-  if (Subtarget.hasVendorXSig() && Subtarget.isSigMode()) {
-    setOperationAction(ISD::ADDRSPACECAST, MVT::i64, Custom);
+  if (Subtarget.hasVendorXSig()) {
+    setOperationAction(ISD::INTRINSIC_VOID, MVT::Other, Custom);
+    setOperationAction(ISD::INTRINSIC_W_CHAIN, MVT::Other, Custom);
+    if (Subtarget.isSigMode()) {
+      setOperationAction(ISD::ADDRSPACECAST, MVT::i64, Custom);
+    }
   }
 
   // Function alignments.
@@ -11070,13 +11075,20 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
     break; // Don't custom lower most intrinsics.
   case Intrinsic::riscv_xsig_setrawid: {
     SDValue Ptr = Op.getOperand(1);
-
     return DAG.getNode(RISCVISD::XSIG_SETRAWID, DL, Op.getValueType(), Ptr);
   }
   case Intrinsic::riscv_xsig_setnewid: {
     SDValue Ptr = Op.getOperand(1);
 
     return DAG.getNode(RISCVISD::XSIG_SETNEWID, DL, Op.getValueType(), Ptr);
+  }
+  case Intrinsic::riscv_xsig_sigload: {
+    return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
+      MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MOEncrypted);
+  }
+  case Intrinsic::riscv_xsig_dynsigload: {
+    return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
+      MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MODynEncrypted);
   }
   case Intrinsic::riscv_tuple_insert: {
     SDValue Vec = Op.getOperand(1);
@@ -11445,6 +11457,14 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op,
   switch (IntNo) {
   default:
     break;
+  case Intrinsic::riscv_xsig_sigload: {
+    return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
+      MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MOEncrypted);
+  }
+  case Intrinsic::riscv_xsig_dynsigload: {
+    return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
+      MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MODynEncrypted);
+  }
   case Intrinsic::riscv_seg2_load_mask:
   case Intrinsic::riscv_seg3_load_mask:
   case Intrinsic::riscv_seg4_load_mask:
@@ -11590,6 +11610,14 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_VOID(SDValue Op,
   switch (IntNo) {
   default:
     break;
+  case Intrinsic::riscv_xsig_sigstore: {
+    return DAG.getStore(Op.getOperand(0), SDLoc(Op), Op.getOperand(3), Op.getOperand(2),
+        MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MOEncrypted);
+  }
+  case Intrinsic::riscv_xsig_dynsigstore: {
+    return DAG.getStore(Op.getOperand(0), SDLoc(Op), Op.getOperand(3), Op.getOperand(2),
+        MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MODynEncrypted);
+  }
   case Intrinsic::riscv_seg2_store_mask:
   case Intrinsic::riscv_seg3_store_mask:
   case Intrinsic::riscv_seg4_store_mask:

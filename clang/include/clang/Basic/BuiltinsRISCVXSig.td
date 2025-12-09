@@ -24,4 +24,8 @@ let Attributes = [NoThrow, Const] in {
 
 def setrawid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
 def setnewid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
+def sigload : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
+def sigstore : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
+def dynsigload : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
+def dynsigstore : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
 } // Attributes = [NoThrow, Const]
