@@ -366,6 +366,9 @@ public:
   virtual bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const {
     return false;
   }
+  virtual bool isNoopAddrSpaceCastConstant(unsigned SrcAS, unsigned DestAS) const {
+    return isNoopAddrSpaceCast(SrcAS, DestAS);
+  }
 
   void setPGOOption(std::optional<PGOOptions> PGOOpt) { PGOOption = PGOOpt; }
   const std::optional<PGOOptions> &getPGOOption() const { return PGOOption; }

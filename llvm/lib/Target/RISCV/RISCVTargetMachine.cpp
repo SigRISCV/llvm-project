@@ -141,6 +141,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVRedundantCopyEliminationPass(*PR);
   initializeRISCVAsmPrinterPass(*PR);
   initializeRISCVPromoteConstantPass(*PR);
+  initializeRISCVCollectGlobalPointersPass(*PR);
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
@@ -271,6 +272,12 @@ bool RISCVTargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
   if (SrcAS == 0 && DstAS == 100 || SrcAS == 100 && DstAS == 0) {
     return false;
   }
+  
+  return true;
+}
+
+bool RISCVTargetMachine::isNoopAddrSpaceCastConstant(unsigned SrcAS,
+                                             unsigned DstAS) const {
   
   return true;
 }
@@ -454,6 +461,9 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
 void RISCVPassConfig::addIRPasses() {
   addPass(createAtomicExpandLegacyPass());
   addPass(createRISCVZacasABIFixPass());
+
+  // Collect global pointers for SigMode support
+  addPass(createRISCVCollectGlobalPointersPass());
 
   if (getOptLevel() != CodeGenOptLevel::None) {
     if (EnableLoopDataPrefetch)
