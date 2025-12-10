@@ -20,6 +20,7 @@
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
@@ -241,6 +242,13 @@ private:
       : Kind(IsParenAggInit ? EK_ParenAggInitMember : EK_Member),
         Parent(Parent), Type(Member->getType()),
         Variable{Member, Implicit, DefaultMemberInit} {}
+  
+  InitializedEntity(FieldDecl *Member, const InitializedEntity *Parent, const QualType Type,
+                    bool Implicit, bool DefaultMemberInit,
+                    bool IsParenAggInit = false)
+      : Kind(IsParenAggInit ? EK_ParenAggInitMember : EK_Member),
+        Parent(Parent), Type(Type),
+        Variable{Member, Implicit, DefaultMemberInit} {}
 
   /// Create the initialization entity for an array element.
   InitializedEntity(ASTContext &Context, unsigned Index,
@@ -389,6 +397,13 @@ public:
                    const InitializedEntity *Parent = nullptr,
                    bool Implicit = false) {
     return InitializedEntity(Member, Parent, Implicit, false);
+  }
+
+  static InitializedEntity
+  InitializeRawMember(FieldDecl *Member,
+                   const InitializedEntity *Parent, const QualType Type, 
+                   bool Implicit = false) {
+    return InitializedEntity(Member, Parent, Type, Implicit, false);
   }
 
   /// Create the initialization entity for a member subobject.

@@ -419,6 +419,8 @@ class InitListChecker {
                              InitListExpr *StructuredList,
                              unsigned &StructuredIndex,
                              bool TopLevelObject = false);
+  InitializedEntity getEntityWithRawCheck(FieldDecl *Field,
+                   const InitializedEntity& Entity);
   void CheckArrayType(const InitializedEntity &Entity,
                       InitListExpr *IList, QualType &DeclType,
                       llvm::APSInt elementIndex,
@@ -2347,6 +2349,20 @@ static bool isInitializedStructuredList(const InitListExpr *StructuredList) {
   return StructuredList && StructuredList->getNumInits() == 1U;
 }
 
+InitializedEntity InitListChecker::getEntityWithRawCheck(FieldDecl *Field,
+                   const InitializedEntity& Entity) {
+  QualType FieldType = Field->getType();
+  if (Entity.getType().isRawQualified()) {
+    Qualifiers quals;
+    quals.addRaw();
+    FieldType = SemaRef.Context.getQualifiedType(FieldType, quals);
+  }
+  InitializedEntity MemberEntity = Entity.getType().isRawQualified() ?
+    InitializedEntity::InitializeRawMember(Field, &Entity, FieldType) :
+    InitializedEntity::InitializeMember(Field, &Entity);
+  return MemberEntity;
+}
+
 void InitListChecker::CheckStructUnionTypes(
     const InitializedEntity &Entity, InitListExpr *IList, QualType DeclType,
     CXXRecordDecl::base_class_const_range Bases, RecordDecl::field_iterator Field,
@@ -2399,8 +2415,9 @@ void InitListChecker::CheckStructUnionTypes(
     for (RecordDecl::field_iterator FieldEnd = RD->field_end();
          Field != FieldEnd; ++Field) {
       if (!Field->isUnnamedBitField()) {
+        InitializedEntity MemberEntity = getEntityWithRawCheck(*Field, Entity);
         CheckEmptyInitializable(
-            InitializedEntity::InitializeMember(*Field, &Entity),
+            MemberEntity,
             IList->getEndLoc());
         if (StructuredList)
           StructuredList->setInitializedFieldInUnion(*Field);
@@ -2589,9 +2606,9 @@ void InitListChecker::CheckStructUnionTypes(
       }
     }
 
-    InitializedEntity MemberEntity =
-      InitializedEntity::InitializeMember(*Field, &Entity);
-    CheckSubElementType(MemberEntity, IList, Field->getType(), Index,
+    QualType FieldType = Field->getType();
+    InitializedEntity MemberEntity = getEntityWithRawCheck(*Field, Entity);
+    CheckSubElementType(MemberEntity, IList, FieldType, Index,
                         StructuredList, StructuredIndex);
     InitializedSomething = true;
     InitializedFields.insert(*Field);
@@ -2636,10 +2653,12 @@ void InitListChecker::CheckStructUnionTypes(
   if (!StructuredList && Field != FieldEnd && !RD->isUnion() &&
       !Field->getType()->isIncompleteArrayType()) {
     for (; Field != FieldEnd && !hadError; ++Field) {
-      if (!Field->isUnnamedBitField() && !Field->hasInClassInitializer())
+      if (!Field->isUnnamedBitField() && !Field->hasInClassInitializer()) {
+        InitializedEntity MemberEntity = getEntityWithRawCheck(*Field, Entity);
         CheckEmptyInitializable(
-            InitializedEntity::InitializeMember(*Field, &Entity),
+            MemberEntity,
             IList->getEndLoc());
+      }
     }
   }
 
@@ -2669,14 +2688,15 @@ void InitListChecker::CheckStructUnionTypes(
     return;
   }
 
-  InitializedEntity MemberEntity =
-    InitializedEntity::InitializeMember(*Field, &Entity);
+  
+  InitializedEntity MemberEntity = getEntityWithRawCheck(*Field, Entity);
 
   if (isa<InitListExpr>(IList->getInit(Index)) ||
-      AggrDeductionCandidateParamTypes)
-    CheckSubElementType(MemberEntity, IList, Field->getType(), Index,
+      AggrDeductionCandidateParamTypes) {
+    QualType FieldType = Field->getType();
+    CheckSubElementType(MemberEntity, IList, FieldType, Index,
                         StructuredList, StructuredIndex);
-  else
+  } else
     CheckImplicitInitList(MemberEntity, IList, Field->getType(), Index,
                           StructuredList, StructuredIndex);
 
@@ -3168,7 +3188,16 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
 
       InitializedEntity MemberEntity =
         InitializedEntity::InitializeMember(*Field, &Entity);
-      CheckSubElementType(MemberEntity, IList, Field->getType(), Index,
+      QualType FieldType = Field->getType();
+      if (Entity.getType().isRawQualified()) {
+        DEBUG_FILE << Entity.getType().getAsString() << "\n";
+        DEBUG_FILE << FieldType.getAsString() << "\n";
+        Qualifiers quals = FieldType.getQualifiers();
+        quals.addRaw();
+        const Type* field_type = FieldType.getTypePtr();
+        FieldType = SemaRef.Context.getQualifiedType(field_type, quals);
+      }
+      CheckSubElementType(MemberEntity, IList, FieldType, Index,
                           StructuredList, newStructuredIndex);
 
       IList->setInit(OldIndex, DIE);
