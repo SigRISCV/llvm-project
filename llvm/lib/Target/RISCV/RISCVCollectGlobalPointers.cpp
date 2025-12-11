@@ -13,12 +13,25 @@
 // - DataID: The ID of the data region this entry belongs to
 // - PointToID: The ID of the data region this entry points to
 //
-// GOT entries: DataID = 0xFFFFFF, PointToID = 1, 2, 3, ... (unique per global)
-// Pointer entries: DataID = the GOT PointToID of containing global
-//                  PointToID rules:
-//                    - Pointing to AS100/NULL/undef → 0
-//                    - Function pointer (initialized) → 0xFFFFFF  
-//                    - Pointing to other global → that global's GOT PointToID
+// GOT entries: DataID = 0xFFFFFF (implicit), PointToID = 1, 2, 3, ...
+// Output format: { addr, PointToID } (DataID is always 0xFFFFFF, not stored)
+//
+// Pointer entries are stored in compressed formats to reduce table size:
+//
+// Type1 (ContiguousDifferent): Contiguous pointers with different PointToIDs
+//   Format: { type=1, addr, DataID, count, [PointToID...] }
+//
+// Type2 (ContiguousSame): Contiguous pointers with same PointToID  
+//   Format: { type=2, addr, DataID, count, PointToID }
+//
+// Type3 (SparseDifferent): Non-contiguous pointers with different PointToIDs
+//   Format: { type=3, addr, DataID, count, [(offset, PointToID)...] }
+//
+// Type4 (SparseSame): Non-contiguous pointers with same PointToID
+//   Format: { type=4, addr, DataID, count, PointToID, [offset...] }
+//
+// Type5 (Single): Single pointer
+//   Format: { type=5, addr, DataID, PointToID }
 //
 //===----------------------------------------------------------------------===//
 
@@ -33,7 +46,6 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
-#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -45,28 +57,44 @@ using namespace llvm;
 
 STATISTIC(NumPointersCollected, "Number of global pointers collected");
 STATISTIC(NumGOTEntries, "Number of GOT entries created");
+STATISTIC(NumCompressedEntries, "Number of compressed pointer groups");
 
 // Special IDs
-static constexpr uint32_t PC_POINT_TO_ID = 0xFFFFFF;
-static constexpr uint32_t NULL_POINT_TO_ID = 0;
+static constexpr uint32_t ExternalPointToID = 0xFFFFFF;
+static constexpr uint32_t NullPointToID = 0;
+
+// Pointer group types
+enum class PtrGroupType : uint8_t {
+  ContiguousDifferent = 1,  // Contiguous pointers, different PointToIDs
+  ContiguousSame = 2,       // Contiguous pointers, same PointToID
+  SparseDifferent = 3,      // Non-contiguous pointers, different PointToIDs
+  SparseSame = 4,           // Non-contiguous pointers, same PointToID
+  Single = 5                // Single pointer
+};
 
 namespace {
 
-// Structure to represent a pointer entry in the table
-struct PointerEntry {
-  GlobalVariable *ContainingGV;  // The global variable containing this pointer
-  uint64_t Offset;               // Byte offset within the global variable
-  uint32_t DataID;               // ID of the data region this pointer belongs to
-  uint32_t PointToID;            // ID of the data region this pointer points to
+// Structure to represent a single pointer within a global
+struct PointerInfo {
+  uint64_t Offset;      // Byte offset within the global variable
+  uint32_t PointToID;   // ID of the data region this pointer points to
+};
+
+// Structure to represent a group of pointers in a global variable
+struct PointerGroup {
+  GlobalVariable *ContainingGV;       // The global variable
+  uint32_t DataID;                    // ID of this data region
+  PtrGroupType Type;                  // Type of compression
+  SmallVector<PointerInfo, 8> Ptrs;   // Individual pointers (for Type1, Type3, Type5)
+  uint32_t CommonPointToID;           // Common PointToID (for Type2, Type4)
+  SmallVector<uint64_t, 8> Offsets;   // Offsets only (for Type4)
 };
 
 // Structure to represent a GOT entry
 struct GOTEntry {
-  GlobalVariable *GV;            // The global variable
-  uint32_t DataID;               // Always 0xFFFFFF for GOT entries
-  uint32_t PointToID;            // The assigned PointToID (1, 2, 3, ...)
-  uint64_t StartAddr;            // Start address (for range checking)
-  uint64_t Size;                 // Size of the global
+  GlobalVariable *GV;     // The global variable
+  uint32_t PointToID;     // The assigned PointToID (1, 2, 3, ...)
+  uint64_t Size;          // Size of the global
 };
 
 class RISCVCollectGlobalPointers : public ModulePass {
@@ -89,8 +117,8 @@ private:
   // Map from GlobalVariable to its GOT entry
   DenseMap<const GlobalVariable *, GOTEntry> GOTMap;
   
-  // All pointer entries found
-  SmallVector<PointerEntry, 64> PointerEntries;
+  // All pointer groups found
+  SmallVector<PointerGroup, 64> PointerGroups;
 
   // Build the GOT map for all global variables
   void buildGOTMap(Module &M, const DataLayout &DL);
@@ -98,16 +126,30 @@ private:
   // Check if a type contains any pointer
   bool containsPointer(Type *Ty);
 
+  // Check if a type is "pointer-only" (only contains pointers, no other data)
+  bool isPointerOnlyType(Type *Ty, const DataLayout &DL, unsigned PtrSize);
+
   // Get the PointToID for a constant value
   uint32_t getPointToID(Constant *C);
 
-  // Recursively collect pointers in a constant
-  void collectPointersInConstant(Constant *C, const DataLayout &DL,
-                                 uint64_t BaseOffset, uint32_t DataID,
-                                 GlobalVariable *ContainingGV);
-
   // Find the PointToID when a pointer points to a global value
   uint32_t findGOTPointToID(const GlobalValue *GV);
+
+  // Collect all pointers in a constant, storing them in a flat list
+  void collectAllPointers(Constant *C, const DataLayout &DL,
+                          uint64_t BaseOffset,
+                          SmallVectorImpl<PointerInfo> &Result);
+
+  // Collect pointer offsets from a type (for uninitialized globals)
+  // All pointers are treated as PointToID = 0
+  void collectPointerOffsetsFromType(Type *Ty, const DataLayout &DL,
+                                     uint64_t BaseOffset,
+                                     SmallVectorImpl<PointerInfo> &Result);
+
+  // Analyze pointers and create optimized groups
+  void analyzeAndGroupPointers(GlobalVariable *GV, const DataLayout &DL,
+                               uint32_t DataID,
+                               const SmallVectorImpl<PointerInfo> &Ptrs);
 
   // Generate the pointer table section
   void generatePointerTable(Module &M, const DataLayout &DL);
@@ -144,6 +186,46 @@ bool RISCVCollectGlobalPointers::containsPointer(Type *Ty) {
   return false;
 }
 
+bool RISCVCollectGlobalPointers::isPointerOnlyType(Type *Ty, const DataLayout &DL,
+                                                    unsigned PtrSize) {
+  // Direct pointer type
+  if (Ty->isPointerTy())
+    return true;
+
+  // Array of pointer-only elements
+  if (ArrayType *ATy = dyn_cast<ArrayType>(Ty))
+    return isPointerOnlyType(ATy->getElementType(), DL, PtrSize);
+
+  // Struct where all elements are pointers and tightly packed
+  if (StructType *STy = dyn_cast<StructType>(Ty)) {
+    const StructLayout *SL = DL.getStructLayout(STy);
+    uint64_t ExpectedOffset = 0;
+    
+    for (unsigned I = 0; I < STy->getNumElements(); ++I) {
+      Type *ElemTy = STy->getElementType(I);
+      
+      // Check if element is pointer-only
+      if (!isPointerOnlyType(ElemTy, DL, PtrSize))
+        return false;
+      
+      // Check if offset matches expected (no padding)
+      if (SL->getElementOffset(I) != ExpectedOffset)
+        return false;
+      
+      ExpectedOffset += DL.getTypeAllocSize(ElemTy);
+    }
+    
+    // Check no trailing padding
+    return SL->getSizeInBytes() == ExpectedOffset;
+  }
+
+  // Vector of pointers (rare but possible)
+  if (auto *VTy = dyn_cast<FixedVectorType>(Ty))
+    return isPointerOnlyType(VTy->getElementType(), DL, PtrSize);
+
+  return false;
+}
+
 void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
   uint32_t NextPointToID = 1;
 
@@ -161,72 +243,61 @@ void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
       continue;
 
     // Create GOT entry for this global
-    // GOT entries: DataID = 0xFFFFFF, PointToID = 1, 2, 3, ...
+    // GOT entries: DataID = 0xFFFFFF (implicit), PointToID = 1, 2, 3, ...
     GOTEntry Entry;
     Entry.GV = &GV;
-    Entry.DataID = PC_POINT_TO_ID;  // GOT always has DataID = 0xFFFFFF
-    Entry.PointToID = NextPointToID++;     // Sequential PointToID
-    Entry.StartAddr = 0;  // Will be resolved at link time
+    Entry.PointToID = NextPointToID++;
     Entry.Size = DL.getTypeAllocSize(GV.getValueType());
 
     GOTMap[&GV] = Entry;
     ++NumGOTEntries;
 
     LLVM_DEBUG(dbgs() << "GOT Entry: " << GV.getName() 
-                      << " DataID=" << Entry.DataID 
                       << " PointToID=" << Entry.PointToID
                       << " Size=" << Entry.Size << "\n");
   }
 }
 
-// Find the PointToID when a pointer points to a global value
-// This returns the GOT PointToID of the target global
 uint32_t RISCVCollectGlobalPointers::findGOTPointToID(const GlobalValue *GV) {
-  // Check if it's a global variable in our GOT map
   if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV)) {
     auto It = GOTMap.find(GVar);
     if (It != GOTMap.end())
-      return It->second.PointToID;  // Return the GOT's PointToID
+      return It->second.PointToID;
   }
   
-  // Functions and external globals get PC_POINT_TO_ID
-  return PC_POINT_TO_ID;
+  // Functions and external globals get ExternalPointToID
+  return ExternalPointToID;
 }
 
 uint32_t RISCVCollectGlobalPointers::getPointToID(Constant *C) {
   // Null pointer
   if (isa<ConstantPointerNull>(C))
-    return NULL_POINT_TO_ID;
+    return NullPointToID;
 
   // Undef value
   if (isa<UndefValue>(C))
-    return NULL_POINT_TO_ID;
+    return NullPointToID;
 
   // Check if pointing to address space 100
   if (C->getType()->isPointerTy()) {
     unsigned AS = C->getType()->getPointerAddressSpace();
     if (AS == 100)
-      return NULL_POINT_TO_ID;
+      return NullPointToID;
   }
 
   // Global value (variable or function)
   if (GlobalValue *GV = dyn_cast<GlobalValue>(C)) {
-    // Function pointer
     if (isa<Function>(GV))
-      return PC_POINT_TO_ID;
-    
-    // Global variable - find its GOT PointToID
+      return ExternalPointToID;
     return findGOTPointToID(GV);
   }
 
-  // Constant expression (e.g., getelementptr, bitcast, addrspacecast)
+  // Constant expression
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
-    // Check if result is in address space 100
     if (CE->getType()->isPointerTy() && 
         CE->getType()->getPointerAddressSpace() == 100)
-      return NULL_POINT_TO_ID;
+      return NullPointToID;
 
-    // For GEP, bitcast, addrspacecast - trace back to the base
     switch (CE->getOpcode()) {
     case Instruction::GetElementPtr:
     case Instruction::BitCast:
@@ -240,32 +311,24 @@ uint32_t RISCVCollectGlobalPointers::getPointToID(Constant *C) {
 
   // Block address
   if (isa<BlockAddress>(C))
-    return PC_POINT_TO_ID;
+    return ExternalPointToID;
 
-  // Default - treat as external
-  return PC_POINT_TO_ID;
+  return ExternalPointToID;
 }
 
-void RISCVCollectGlobalPointers::collectPointersInConstant(
-    Constant *C, const DataLayout &DL, uint64_t BaseOffset, uint32_t DataID,
-    GlobalVariable *ContainingGV) {
+void RISCVCollectGlobalPointers::collectAllPointers(
+    Constant *C, const DataLayout &DL, uint64_t BaseOffset,
+    SmallVectorImpl<PointerInfo> &Result) {
 
   Type *Ty = C->getType();
 
   // If this is a pointer type, record it
   if (Ty->isPointerTy()) {
-    PointerEntry Entry;
-    Entry.ContainingGV = ContainingGV;
-    Entry.Offset = BaseOffset;
-    Entry.DataID = DataID;
-    Entry.PointToID = getPointToID(C);
-
-    PointerEntries.push_back(Entry);
+    PointerInfo Info;
+    Info.Offset = BaseOffset;
+    Info.PointToID = getPointToID(C);
+    Result.push_back(Info);
     ++NumPointersCollected;
-
-    LLVM_DEBUG(dbgs() << "  Pointer at offset " << BaseOffset
-                      << " DataID=" << DataID
-                      << " PointToID=" << Entry.PointToID << "\n");
     return;
   }
 
@@ -273,9 +336,9 @@ void RISCVCollectGlobalPointers::collectPointersInConstant(
   if (ConstantArray *CA = dyn_cast<ConstantArray>(C)) {
     Type *ElemTy = CA->getType()->getElementType();
     uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
-    for (unsigned i = 0; i < CA->getNumOperands(); ++i) {
-      collectPointersInConstant(CA->getOperand(i), DL,
-                                BaseOffset + i * ElemSize, DataID, ContainingGV);
+    for (unsigned I = 0; I < CA->getNumOperands(); ++I) {
+      collectAllPointers(CA->getOperand(I), DL,
+                         BaseOffset + I * ElemSize, Result);
     }
     return;
   }
@@ -283,10 +346,10 @@ void RISCVCollectGlobalPointers::collectPointersInConstant(
   if (ConstantStruct *CS = dyn_cast<ConstantStruct>(C)) {
     StructType *STy = CS->getType();
     const StructLayout *SL = DL.getStructLayout(STy);
-    for (unsigned i = 0; i < CS->getNumOperands(); ++i) {
-      uint64_t ElemOffset = SL->getElementOffset(i);
-      collectPointersInConstant(CS->getOperand(i), DL,
-                                BaseOffset + ElemOffset, DataID, ContainingGV);
+    for (unsigned I = 0; I < CS->getNumOperands(); ++I) {
+      uint64_t ElemOffset = SL->getElementOffset(I);
+      collectAllPointers(CS->getOperand(I), DL,
+                         BaseOffset + ElemOffset, Result);
     }
     return;
   }
@@ -294,40 +357,181 @@ void RISCVCollectGlobalPointers::collectPointersInConstant(
   if (ConstantVector *CV = dyn_cast<ConstantVector>(C)) {
     Type *ElemTy = CV->getType()->getElementType();
     uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
-    for (unsigned i = 0; i < CV->getNumOperands(); ++i) {
-      collectPointersInConstant(CV->getOperand(i), DL,
-                                BaseOffset + i * ElemSize, DataID, ContainingGV);
+    for (unsigned I = 0; I < CV->getNumOperands(); ++I) {
+      collectAllPointers(CV->getOperand(I), DL,
+                         BaseOffset + I * ElemSize, Result);
     }
     return;
   }
 
   if (ConstantAggregateZero *CAZ = dyn_cast<ConstantAggregateZero>(C)) {
-    // Zero-initialized - if type contains pointers, they are all null
+    (void)CAZ;
     if (containsPointer(Ty)) {
-      // Recursively handle as if it were explicit zeros
       if (ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
         Type *ElemTy = ATy->getElementType();
         uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
         Constant *ZeroElem = Constant::getNullValue(ElemTy);
-        for (uint64_t i = 0; i < ATy->getNumElements(); ++i) {
-          collectPointersInConstant(ZeroElem, DL,
-                                    BaseOffset + i * ElemSize, DataID, ContainingGV);
+        for (uint64_t I = 0; I < ATy->getNumElements(); ++I) {
+          collectAllPointers(ZeroElem, DL,
+                             BaseOffset + I * ElemSize, Result);
         }
       } else if (StructType *STy = dyn_cast<StructType>(Ty)) {
         const StructLayout *SL = DL.getStructLayout(STy);
-        for (unsigned i = 0; i < STy->getNumElements(); ++i) {
-          uint64_t ElemOffset = SL->getElementOffset(i);
-          Constant *ZeroElem = Constant::getNullValue(STy->getElementType(i));
-          collectPointersInConstant(ZeroElem, DL,
-                                    BaseOffset + ElemOffset, DataID, ContainingGV);
+        for (unsigned I = 0; I < STy->getNumElements(); ++I) {
+          uint64_t ElemOffset = SL->getElementOffset(I);
+          Constant *ZeroElem = Constant::getNullValue(STy->getElementType(I));
+          collectAllPointers(ZeroElem, DL,
+                             BaseOffset + ElemOffset, Result);
         }
       }
     }
     return;
   }
 
-  // ConstantDataSequential - contains only primitive data, no pointers
-  // ConstantInt, ConstantFP, etc. - not pointers
+  // ConstantDataSequential, ConstantInt, ConstantFP - no pointers
+}
+
+void RISCVCollectGlobalPointers::collectPointerOffsetsFromType(
+    Type *Ty, const DataLayout &DL, uint64_t BaseOffset,
+    SmallVectorImpl<PointerInfo> &Result) {
+
+  // If this is a pointer type, record it with PointToID = 0 (uninitialized)
+  if (Ty->isPointerTy()) {
+    PointerInfo Info;
+    Info.Offset = BaseOffset;
+    Info.PointToID = NullPointToID;  // Uninitialized pointers get PointToID = 0
+    Result.push_back(Info);
+    ++NumPointersCollected;
+    return;
+  }
+
+  // Handle array types
+  if (ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
+    Type *ElemTy = ATy->getElementType();
+    if (!containsPointer(ElemTy))
+      return;
+    
+    uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
+    for (uint64_t I = 0; I < ATy->getNumElements(); ++I) {
+      collectPointerOffsetsFromType(ElemTy, DL, BaseOffset + I * ElemSize, Result);
+    }
+    return;
+  }
+
+  // Handle struct types
+  if (StructType *STy = dyn_cast<StructType>(Ty)) {
+    const StructLayout *SL = DL.getStructLayout(STy);
+    for (unsigned I = 0; I < STy->getNumElements(); ++I) {
+      Type *ElemTy = STy->getElementType(I);
+      if (containsPointer(ElemTy)) {
+        uint64_t ElemOffset = SL->getElementOffset(I);
+        collectPointerOffsetsFromType(ElemTy, DL, BaseOffset + ElemOffset, Result);
+      }
+    }
+    return;
+  }
+
+  // Handle vector types
+  if (auto *VTy = dyn_cast<FixedVectorType>(Ty)) {
+    Type *ElemTy = VTy->getElementType();
+    if (!containsPointer(ElemTy))
+      return;
+    
+    uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
+    for (unsigned I = 0; I < VTy->getNumElements(); ++I) {
+      collectPointerOffsetsFromType(ElemTy, DL, BaseOffset + I * ElemSize, Result);
+    }
+    return;
+  }
+
+  // Other types don't contain pointers
+}
+
+void RISCVCollectGlobalPointers::analyzeAndGroupPointers(
+    GlobalVariable *GV, const DataLayout &DL, uint32_t DataID,
+    const SmallVectorImpl<PointerInfo> &Ptrs) {
+  
+  if (Ptrs.empty())
+    return;
+
+  unsigned PtrSize = DL.getPointerSize();
+
+  // Single pointer - Type5
+  if (Ptrs.size() == 1) {
+    PointerGroup Group;
+    Group.ContainingGV = GV;
+    Group.DataID = DataID;
+    Group.Type = PtrGroupType::Single;
+    Group.Ptrs.push_back(Ptrs[0]);
+    PointerGroups.push_back(std::move(Group));
+    ++NumCompressedEntries;
+    
+    LLVM_DEBUG(dbgs() << "  Single pointer at offset " << Ptrs[0].Offset
+                      << " PointToID=" << Ptrs[0].PointToID << "\n");
+    return;
+  }
+
+  // Check if pointers are contiguous
+  bool IsContiguous = true;
+  uint64_t ExpectedOffset = Ptrs[0].Offset;
+  for (const auto &P : Ptrs) {
+    if (P.Offset != ExpectedOffset) {
+      IsContiguous = false;
+      break;
+    }
+    ExpectedOffset += PtrSize;
+  }
+
+  // Check if all PointToIDs are the same
+  bool AllSamePointToID = true;
+  uint32_t FirstPointToID = Ptrs[0].PointToID;
+  for (const auto &P : Ptrs) {
+    if (P.PointToID != FirstPointToID) {
+      AllSamePointToID = false;
+      break;
+    }
+  }
+
+  PointerGroup Group;
+  Group.ContainingGV = GV;
+  Group.DataID = DataID;
+
+  if (IsContiguous && AllSamePointToID) {
+    // Type2: Contiguous pointers with same PointToID
+    Group.Type = PtrGroupType::ContiguousSame;
+    Group.CommonPointToID = FirstPointToID;
+    for (const auto &P : Ptrs)
+      Group.Ptrs.push_back(P);
+    
+    LLVM_DEBUG(dbgs() << "  ContiguousSame: " << Ptrs.size() 
+                      << " pointers, PointToID=" << FirstPointToID << "\n");
+  } else if (IsContiguous && !AllSamePointToID) {
+    // Type1: Contiguous pointers with different PointToIDs
+    Group.Type = PtrGroupType::ContiguousDifferent;
+    for (const auto &P : Ptrs)
+      Group.Ptrs.push_back(P);
+    
+    LLVM_DEBUG(dbgs() << "  ContiguousDifferent: " << Ptrs.size() << " pointers\n");
+  } else if (!IsContiguous && AllSamePointToID) {
+    // Type4: Non-contiguous pointers with same PointToID
+    Group.Type = PtrGroupType::SparseSame;
+    Group.CommonPointToID = FirstPointToID;
+    for (const auto &P : Ptrs)
+      Group.Offsets.push_back(P.Offset);
+    
+    LLVM_DEBUG(dbgs() << "  SparseSame: " << Ptrs.size() 
+                      << " pointers, PointToID=" << FirstPointToID << "\n");
+  } else {
+    // Type3: Non-contiguous pointers with different PointToIDs
+    Group.Type = PtrGroupType::SparseDifferent;
+    for (const auto &P : Ptrs)
+      Group.Ptrs.push_back(P);
+    
+    LLVM_DEBUG(dbgs() << "  SparseDifferent: " << Ptrs.size() << " pointers\n");
+  }
+
+  PointerGroups.push_back(std::move(Group));
+  ++NumCompressedEntries;
 }
 
 void RISCVCollectGlobalPointers::generatePointerTable(Module &M, 
@@ -336,27 +540,32 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
   unsigned PtrSize = DL.getPointerSize();
   
   // Types for table entries
+  Type *I8Ty = Type::getInt8Ty(Ctx);
   Type *I32Ty = Type::getInt32Ty(Ctx);
   Type *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
-  Type *I8Ty = Type::getInt8Ty(Ctx);
 
   // === Generate GOT Table ===
-  // Format: { GlobalPtr, DataID (0xFFFFFF), PointToID (1,2,3...) }
-  SmallVector<Constant *, 64> GOTTableEntries;
+  // Format: { addr (ptr-sized), PointToID (i32) }
+  // DataID is always 0xFFFFFF, not stored
+  // Sort by PointToID to ensure consistent ordering
   
-  // Create struct type for GOT entry: { ptr, i32, i32 }
-  StructType *GOTEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I32Ty, I32Ty});
-
+  SmallVector<const GOTEntry *, 64> SortedGOTEntries;
   for (auto &KV : GOTMap) {
-    const GOTEntry &Entry = KV.second;
-    
-    // Pointer to the global (as integer)
-    Constant *GVPtr = ConstantExpr::getPtrToInt(Entry.GV, PtrSizedIntTy);
-    Constant *DataIDConst = ConstantInt::get(I32Ty, Entry.DataID);         // 0xFFFFFF
-    Constant *PointToIDConst = ConstantInt::get(I32Ty, Entry.PointToID);   // 1, 2, 3...
+    SortedGOTEntries.push_back(&KV.second);
+  }
+  llvm::sort(SortedGOTEntries, [](const GOTEntry *A, const GOTEntry *B) {
+    return A->PointToID < B->PointToID;
+  });
+  
+  SmallVector<Constant *, 64> GOTTableEntries;
+  StructType *GOTEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I32Ty});
+
+  for (const GOTEntry *Entry : SortedGOTEntries) {
+    Constant *GVPtr = ConstantExpr::getPtrToInt(Entry->GV, PtrSizedIntTy);
+    Constant *PointToIDConst = ConstantInt::get(I32Ty, Entry->PointToID);
 
     Constant *GOTEntryConst = ConstantStruct::get(GOTEntryTy, 
-                                                   {GVPtr, DataIDConst, PointToIDConst});
+                                                   {GVPtr, PointToIDConst});
     GOTTableEntries.push_back(GOTEntryConst);
   }
 
@@ -370,59 +579,208 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     GOTTableGV->setSection(".sig_got_table");
     GOTTableGV->setAlignment(Align(PtrSize));
 
-    // GOT table size
+    // Count placed in .sig_count section (all counts in one section)
     GlobalVariable *GOTSizeGV = new GlobalVariable(
         M, I32Ty, /*isConstant=*/true, GlobalValue::ExternalLinkage,
         ConstantInt::get(I32Ty, GOTTableEntries.size()),
         "__sig_got_count");
-    GOTSizeGV->setSection(".sig_got_table");
+    GOTSizeGV->setSection(".sig_count");
   }
 
-  // === Generate Pointer Table ===
-  // Format: { Address, DataID, PointToID }
-  SmallVector<Constant *, 64> PtrTableEntries;
+  // === Generate Compressed Pointer Tables ===
+  // Each type generates a single byte stream with header+data combined
+  
+  // Type5 (Single): { addr, DataID, PointToID }
+  SmallVector<Constant *, 32> SingleEntries;
+  StructType *SingleEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I32Ty, I32Ty});
+  
+  // Type2 (ContiguousSame): { addr, DataID, count, PointToID }
+  SmallVector<Constant *, 32> ContiguousSameEntries;
+  StructType *ContiguousSameEntryTy = StructType::get(Ctx, 
+      {PtrSizedIntTy, I32Ty, I32Ty, I32Ty});
+  
+  // Type1 (ContiguousDifferent): Combined as byte stream
+  // Each entry: { addr, DataID, count, PointToID[count] }
+  SmallVector<Constant *, 256> ContiguousDiffStream;
+  uint32_t ContiguousDiffCount = 0;
+  
+  // Type4 (SparseSame): Combined as byte stream
+  // Each entry: { addr, DataID, count, PointToID, offset[count] }
+  SmallVector<Constant *, 256> SparseSameStream;
+  uint32_t SparseSameCount = 0;
+  
+  // Type3 (SparseDifferent): Combined as byte stream
+  // Each entry: { addr, DataID, count, (offset, PointToID)[count] }
+  SmallVector<Constant *, 256> SparseDiffStream;
+  uint32_t SparseDiffCount = 0;
 
-  // Create struct type for pointer entry: { ptr, i32, i32 }
-  StructType *PtrEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I32Ty, I32Ty});
-
-  for (const PointerEntry &Entry : PointerEntries) {
-    // Calculate address: &ContainingGV + Offset
-    Constant *GVPtr = Entry.ContainingGV;
-    Constant *OffsetConst = ConstantInt::get(PtrSizedIntTy, Entry.Offset);
-    Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(
-        I8Ty, GVPtr, OffsetConst);
-    Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
-
-    Constant *DataIDConst = ConstantInt::get(I32Ty, Entry.DataID);
-    Constant *PointToIDConst = ConstantInt::get(I32Ty, Entry.PointToID);
-
-    Constant *PtrEntryConst = ConstantStruct::get(PtrEntryTy,
-                                                   {Addr, DataIDConst, PointToIDConst});
-    PtrTableEntries.push_back(PtrEntryConst);
+  for (const PointerGroup &Group : PointerGroups) {
+    Constant *GVPtr = Group.ContainingGV;
+    
+    switch (Group.Type) {
+    case PtrGroupType::Single: {
+      const PointerInfo &P = Group.Ptrs[0];
+      Constant *OffsetConst = ConstantInt::get(PtrSizedIntTy, P.Offset);
+      Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
+      Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
+      
+      Constant *Entry = ConstantStruct::get(SingleEntryTy,
+          {Addr, ConstantInt::get(I32Ty, Group.DataID),
+           ConstantInt::get(I32Ty, P.PointToID)});
+      SingleEntries.push_back(Entry);
+      break;
+    }
+    
+    case PtrGroupType::ContiguousSame: {
+      const PointerInfo &P = Group.Ptrs[0];
+      Constant *OffsetConst = ConstantInt::get(PtrSizedIntTy, P.Offset);
+      Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
+      Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
+      
+      Constant *Entry = ConstantStruct::get(ContiguousSameEntryTy,
+          {Addr, ConstantInt::get(I32Ty, Group.DataID),
+           ConstantInt::get(I32Ty, Group.Ptrs.size()),
+           ConstantInt::get(I32Ty, Group.CommonPointToID)});
+      ContiguousSameEntries.push_back(Entry);
+      break;
+    }
+    
+    case PtrGroupType::ContiguousDifferent: {
+      // Format: addr (ptr-sized), DataID (i32), count (i32), PointToID[count] (i32 each)
+      // Store as: [addr_low, addr_high (if 64-bit), DataID, count, PointToID...]
+      const PointerInfo &P = Group.Ptrs[0];
+      Constant *OffsetConst = ConstantInt::get(PtrSizedIntTy, P.Offset);
+      Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
+      Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
+      
+      // Store address directly as ptr-sized value
+      ContiguousDiffStream.push_back(Addr);
+      ContiguousDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.DataID));
+      ContiguousDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size()));
+      
+      for (const PointerInfo &PI : Group.Ptrs) {
+        ContiguousDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, PI.PointToID));
+      }
+      ++ContiguousDiffCount;
+      break;
+    }
+    
+    case PtrGroupType::SparseSame: {
+      // Format: addr (ptr-sized), DataID, count, PointToID, offset[count]
+      Constant *Addr = ConstantExpr::getPtrToInt(GVPtr, PtrSizedIntTy);
+      
+      SparseSameStream.push_back(Addr);
+      SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.DataID));
+      SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.Offsets.size()));
+      SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.CommonPointToID));
+      
+      for (uint64_t Off : Group.Offsets) {
+        SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Off));
+      }
+      ++SparseSameCount;
+      break;
+    }
+    
+    case PtrGroupType::SparseDifferent: {
+      // Format: addr (ptr-sized), DataID, count, (offset, PointToID)[count]
+      Constant *Addr = ConstantExpr::getPtrToInt(GVPtr, PtrSizedIntTy);
+      
+      SparseDiffStream.push_back(Addr);
+      SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.DataID));
+      SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size()));
+      
+      for (const PointerInfo &PI : Group.Ptrs) {
+        SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, PI.Offset));
+        SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, PI.PointToID));
+      }
+      ++SparseDiffCount;
+      break;
+    }
+    }
   }
 
-  if (!PtrTableEntries.empty()) {
-    ArrayType *PtrTableTy = ArrayType::get(PtrEntryTy, PtrTableEntries.size());
-    Constant *PtrTableInit = ConstantArray::get(PtrTableTy, PtrTableEntries);
-
-    GlobalVariable *PtrTableGV = new GlobalVariable(
-        M, PtrTableTy, /*isConstant=*/true, GlobalValue::ExternalLinkage,
-        PtrTableInit, "__sig_ptr_table");
-    PtrTableGV->setSection(".sig_ptr_table");
-    PtrTableGV->setAlignment(Align(PtrSize));
-
-    // Pointer table size
-    GlobalVariable *PtrSizeGV = new GlobalVariable(
-        M, I32Ty, /*isConstant=*/true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, PtrTableEntries.size()),
-        "__sig_ptr_count");
-    PtrSizeGV->setSection(".sig_ptr_table");
+  // Generate global variables for each table type
+  // Each type has its own section for linker merging
+  // All counts go to .sig_count section
+  
+  // Type5 Single entries
+  if (!SingleEntries.empty()) {
+    ArrayType *Ty = ArrayType::get(SingleEntryTy, SingleEntries.size());
+    Constant *Init = ConstantArray::get(Ty, SingleEntries);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_single");
+    GV->setSection(".sig_ptr_single");
+    GV->setAlignment(Align(PtrSize));
+    
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
+        ConstantInt::get(I32Ty, SingleEntries.size()), "__sig_ptr_single_count");
+    CountGV->setSection(".sig_count");
+  }
+  
+  // Type2 ContiguousSame entries
+  if (!ContiguousSameEntries.empty()) {
+    ArrayType *Ty = ArrayType::get(ContiguousSameEntryTy, ContiguousSameEntries.size());
+    Constant *Init = ConstantArray::get(Ty, ContiguousSameEntries);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_contig_same");
+    GV->setSection(".sig_ptr_contig_same");
+    GV->setAlignment(Align(PtrSize));
+    
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
+        ConstantInt::get(I32Ty, ContiguousSameEntries.size()), "__sig_ptr_contig_same_count");
+    CountGV->setSection(".sig_count");
+  }
+  
+  // Type1 ContiguousDifferent - combined stream (ptr-sized elements)
+  if (!ContiguousDiffStream.empty()) {
+    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, ContiguousDiffStream.size());
+    Constant *Init = ConstantArray::get(Ty, ContiguousDiffStream);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_contig_diff");
+    GV->setSection(".sig_ptr_contig_diff");
+    GV->setAlignment(Align(PtrSize));
+    
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
+        ConstantInt::get(I32Ty, ContiguousDiffCount), "__sig_ptr_contig_diff_count");
+    CountGV->setSection(".sig_count");
+  }
+  
+  // Type4 SparseSame - combined stream (ptr-sized elements)
+  if (!SparseSameStream.empty()) {
+    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseSameStream.size());
+    Constant *Init = ConstantArray::get(Ty, SparseSameStream);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_sparse_same");
+    GV->setSection(".sig_ptr_sparse_same");
+    GV->setAlignment(Align(PtrSize));
+    
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
+        ConstantInt::get(I32Ty, SparseSameCount), "__sig_ptr_sparse_same_count");
+    CountGV->setSection(".sig_count");
+  }
+  
+  // Type3 SparseDifferent - combined stream (ptr-sized elements)
+  if (!SparseDiffStream.empty()) {
+    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseDiffStream.size());
+    Constant *Init = ConstantArray::get(Ty, SparseDiffStream);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_sparse_diff");
+    GV->setSection(".sig_ptr_sparse_diff");
+    GV->setAlignment(Align(PtrSize));
+    
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
+        ConstantInt::get(I32Ty, SparseDiffCount), "__sig_ptr_sparse_diff_count");
+    CountGV->setSection(".sig_count");
   }
 
   LLVM_DEBUG(dbgs() << "Generated GOT table with " << GOTTableEntries.size()
                     << " entries\n");
-  LLVM_DEBUG(dbgs() << "Generated pointer table with " << PtrTableEntries.size()
-                    << " entries\n");
+  LLVM_DEBUG(dbgs() << "Generated pointer tables:\n"
+                    << "  Single: " << SingleEntries.size() << "\n"
+                    << "  ContiguousSame: " << ContiguousSameEntries.size() << "\n"
+                    << "  ContiguousDiff: " << ContiguousDiffCount << "\n"
+                    << "  SparseSame: " << SparseSameCount << "\n"
+                    << "  SparseDiff: " << SparseDiffCount << "\n");
 }
 
 bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
@@ -450,7 +808,7 @@ bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
 
   // Clear any previous data
   GOTMap.clear();
-  PointerEntries.clear();
+  PointerGroups.clear();
 
   // Step 1: Build GOT map for all global variables
   buildGOTMap(M, DL);
@@ -475,10 +833,6 @@ bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
       continue;
     }
 
-    // Skip if no initializer
-    if (!GV.hasInitializer())
-      continue;
-
     // Skip if type doesn't contain pointers
     if (!containsPointer(GV.getValueType())) {
       LLVM_DEBUG(dbgs() << "Skipping non-pointer global: " << GV.getName() << "\n");
@@ -486,22 +840,35 @@ bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
     }
 
     // Get the DataID for pointers in this global
-    // Pointer's DataID = the GOT PointToID of the containing global
     auto It = GOTMap.find(&GV);
     if (It == GOTMap.end())
       continue;
-    uint32_t DataID = It->second.PointToID;  // Use GOT's PointToID as pointer's DataID
+    uint32_t DataID = It->second.PointToID;
 
     LLVM_DEBUG(dbgs() << "Analyzing global: " << GV.getName() 
                       << " DataID=" << DataID << "\n");
 
-    // Collect pointers in the initializer
-    collectPointersInConstant(GV.getInitializer(), DL, 0, DataID, &GV);
+    // Collect all pointers
+    SmallVector<PointerInfo, 32> Ptrs;
+    
+    if (GV.hasInitializer()) {
+      // Initialized global - collect pointers from initializer
+      collectAllPointers(GV.getInitializer(), DL, 0, Ptrs);
+    } else {
+      // Uninitialized global - collect pointer offsets from type
+      // All pointers treated as PointToID = 0
+      collectPointerOffsetsFromType(GV.getValueType(), DL, 0, Ptrs);
+      LLVM_DEBUG(dbgs() << "  Uninitialized global, " << Ptrs.size() 
+                        << " pointers with PointToID=0\n");
+    }
+
+    // Analyze and group pointers
+    if (!Ptrs.empty())
+      analyzeAndGroupPointers(&GV, DL, DataID, Ptrs);
   }
 
   // Step 3: Generate the tables
   generatePointerTable(M, DL);
 
-  return !PointerEntries.empty() || !GOTMap.empty();
+  return !PointerGroups.empty() || !GOTMap.empty();
 }
-
