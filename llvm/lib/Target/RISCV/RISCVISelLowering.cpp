@@ -9112,7 +9112,7 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
   // they should be accessed via the GOT, since the tagged address of a global
   // is incompatible with existing code models. This also applies to non-pic
   // mode.
-  if (isPositionIndependent() || Subtarget.allowTaggedGlobals()) {
+  if (isPositionIndependent() || Subtarget.allowTaggedGlobals() || Subtarget.isSigModeSupport()) {
     SDValue Addr = getTargetNode(N, DL, Ty, DAG, 0);
     if (IsLocal && !Subtarget.allowTaggedGlobals())
       // Use PC-relative addressing to access the symbol. This generates the
