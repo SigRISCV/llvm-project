@@ -3677,7 +3677,7 @@ const MCExpr *AsmPrinter::lowerConstant(const Constant *CV,
     const Constant *Op = CE->getOperand(0);
     unsigned DstAS = CE->getType()->getPointerAddressSpace();
     unsigned SrcAS = Op->getType()->getPointerAddressSpace();
-    if (TM.isNoopAddrSpaceCast(SrcAS, DstAS))
+    if (TM.isNoopAddrSpaceCastConstant(SrcAS, DstAS))
       return lowerConstant(Op);
 
     break; // Error

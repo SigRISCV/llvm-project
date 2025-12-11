@@ -115,6 +115,9 @@ void initializeRISCVPreLegalizerCombinerPass(PassRegistry &);
 ModulePass *createRISCVPromoteConstantPass();
 void initializeRISCVPromoteConstantPass(PassRegistry &);
 
+ModulePass *createRISCVCollectGlobalPointersPass();
+void initializeRISCVCollectGlobalPointersPass(PassRegistry &);
+
 FunctionPass *createRISCVVLOptimizerPass();
 void initializeRISCVVLOptimizerPass(PassRegistry &);
 
