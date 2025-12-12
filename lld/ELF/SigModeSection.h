@@ -68,6 +68,17 @@ bool isSigModeSection(StringRef name);
 template <class ELFT>
 void processSigModeSections(Ctx &ctx);
 
+// Convert .sig_got entries in-place from {addr, id} to {gotIndex, id} format
+// This should be called after GOT addresses are finalized (after finalizeAddressDependentContent)
+// 
+// Original format: { addr(64), id(64) } = 16 bytes per entry
+// Converted format: { gotIndex(64), id(64) } = 16 bytes per entry
+//
+// The section size is preserved to avoid layout changes.
+// Only entries that match symbols in GOT are kept; unmatched entries are zeroed.
+template <class ELFT>
+void convertSigGotInPlace(Ctx &ctx);
+
 } // namespace elf
 } // namespace lld
 
