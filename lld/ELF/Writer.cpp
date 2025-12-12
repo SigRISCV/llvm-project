@@ -17,6 +17,7 @@
 #include "MapFile.h"
 #include "OutputSections.h"
 #include "Relocations.h"
+#include "SigModeSection.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
@@ -1904,6 +1905,13 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   // Change values of linker-script-defined symbols from placeholders (assigned
   // by declareSymbols) to actual definitions.
   ctx.script->processSymbolAssignments();
+
+  // Process SigMode sections: relocate IDs across multiple object files
+  // This must be done before relocation scanning so that ID values are correct.
+  if (ctx.arg.emachine == EM_RISCV) {
+    llvm::TimeTraceScope timeScope("Process SigMode sections");
+    processSigModeSections<ELFT>(ctx);
+  }
 
   if (!ctx.arg.relocatable) {
     llvm::TimeTraceScope timeScope("Scan relocations");

@@ -147,33 +147,6 @@ public:
   // Offset data sections (2 types: sparse_same, sparse_diff)
   static constexpr const char *SectionOffsetSparseSame = ".sig_offset_sparse_same";
   static constexpr const char *SectionOffsetSparseDiff = ".sig_offset_sparse_diff";
-  
-  // =========== Global Variable Names ===========
-  // GOT table
-  static constexpr const char *GVNameGOT = "__sig_got";
-  static constexpr const char *GVNameGOTCount = "__sig_got_count";
-  
-  // Header tables
-  static constexpr const char *GVNameHeaderSingle = "__sig_ptr_header_single";
-  static constexpr const char *GVNameHeaderContigSame = "__sig_ptr_header_contig_same";
-  static constexpr const char *GVNameHeaderContigDiff = "__sig_ptr_header_contig_diff";
-  static constexpr const char *GVNameHeaderSparseSame = "__sig_ptr_header_sparse_same";
-  static constexpr const char *GVNameHeaderSparseDiff = "__sig_ptr_header_sparse_diff";
-  
-  // Header counts
-  static constexpr const char *GVNameHeaderSingleCount = "__sig_ptr_header_single_count";
-  static constexpr const char *GVNameHeaderContigSameCount = "__sig_ptr_header_contig_same_count";
-  static constexpr const char *GVNameHeaderContigDiffCount = "__sig_ptr_header_contig_diff_count";
-  static constexpr const char *GVNameHeaderSparseSameCount = "__sig_ptr_header_sparse_same_count";
-  static constexpr const char *GVNameHeaderSparseDiffCount = "__sig_ptr_header_sparse_diff_count";
-  
-  // ID data arrays
-  static constexpr const char *GVNameIDContigDiff = "__sig_id_contig_diff";
-  static constexpr const char *GVNameIDSparseDiff = "__sig_id_sparse_diff";
-  
-  // Offset data arrays
-  static constexpr const char *GVNameOffsetSparseSame = "__sig_offset_sparse_same";
-  static constexpr const char *GVNameOffsetSparseDiff = "__sig_offset_sparse_diff";
 
 private:
   // Map from GlobalVariable to its GOT entry
@@ -654,17 +627,19 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     Constant *GOTTableInit = ConstantArray::get(GOTTableTy, GOTTableEntries);
 
     GlobalVariable *GOTTableGV = new GlobalVariable(
-        M, GOTTableTy, /*isConstant=*/true, GlobalValue::ExternalLinkage,
-        GOTTableInit, GVNameGOT);
+        M, GOTTableTy, /*isConstant=*/true, GlobalValue::PrivateLinkage,
+        GOTTableInit, "");
     GOTTableGV->setSection(SectionGOT);
     GOTTableGV->setAlignment(Align(PtrSize));
 
     // Count placed in .sig_ptr_header_counter section (all counts in one section)
     GlobalVariable *GOTSizeGV = new GlobalVariable(
-        M, I32Ty, /*isConstant=*/true, GlobalValue::ExternalLinkage,
+        M, I32Ty, /*isConstant=*/true, GlobalValue::PrivateLinkage,
         ConstantInt::get(I32Ty, GOTTableEntries.size()),
-        GVNameGOTCount);
+        "");
     GOTSizeGV->setSection(SectionCounter);
+  } else {
+    return;
   }
 
   // === Generate Compressed Pointer Tables ===
@@ -807,12 +782,16 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(SingleHeaderTy, SingleHeaders.size());
     Constant *Init = ConstantArray::get(Ty, SingleHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderSingle);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionHeaderSingle);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, SingleHeaders.size()), GVNameHeaderSingleCount);
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, SingleHeaders.size()), "");
+    CountGV->setSection(SectionCounter);
+  } else {
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, 0), "");
     CountGV->setSection(SectionCounter);
   }
   
@@ -821,12 +800,16 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(ContiguousSameHeaderTy, ContiguousSameHeaders.size());
     Constant *Init = ConstantArray::get(Ty, ContiguousSameHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderContigSame);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionHeaderContigSame);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, ContiguousSameHeaders.size()), GVNameHeaderContigSameCount);
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, ContiguousSameHeaders.size()), "");
+    CountGV->setSection(SectionCounter);
+  } else {
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, 0), "");
     CountGV->setSection(SectionCounter);
   }
   
@@ -835,12 +818,16 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(ContiguousDiffHeaderTy, ContiguousDiffHeaders.size());
     Constant *Init = ConstantArray::get(Ty, ContiguousDiffHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderContigDiff);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionHeaderContigDiff);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, ContiguousDiffHeaders.size()), GVNameHeaderContigDiffCount);
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, ContiguousDiffHeaders.size()), "");
+    CountGV->setSection(SectionCounter);
+  } else {
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, 0), "");
     CountGV->setSection(SectionCounter);
   }
   
@@ -849,12 +836,16 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(SparseSameHeaderTy, SparseSameHeaders.size());
     Constant *Init = ConstantArray::get(Ty, SparseSameHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderSparseSame);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionHeaderSparseSame);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, SparseSameHeaders.size()), GVNameHeaderSparseSameCount);
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, SparseSameHeaders.size()), "");
+    CountGV->setSection(SectionCounter);
+  } else {
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, 0), "");
     CountGV->setSection(SectionCounter);
   }
   
@@ -863,12 +854,16 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(SparseDiffHeaderTy, SparseDiffHeaders.size());
     Constant *Init = ConstantArray::get(Ty, SparseDiffHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderSparseDiff);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionHeaderSparseDiff);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, SparseDiffHeaders.size()), GVNameHeaderSparseDiffCount);
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, SparseDiffHeaders.size()), "");
+    CountGV->setSection(SectionCounter);
+  } else {
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, 0), "");
     CountGV->setSection(SectionCounter);
   }
   
@@ -877,7 +872,7 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(I32Ty, ContiguousDiffIDs.size());
     Constant *Init = ConstantArray::get(Ty, ContiguousDiffIDs);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameIDContigDiff);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionIDContigDiff);
     GV->setAlignment(Align(4));
   }
@@ -887,7 +882,7 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(I32Ty, SparseDiffIDs.size());
     Constant *Init = ConstantArray::get(Ty, SparseDiffIDs);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameIDSparseDiff);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionIDSparseDiff);
     GV->setAlignment(Align(4));
   }
@@ -897,7 +892,7 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseSameOffsets.size());
     Constant *Init = ConstantArray::get(Ty, SparseSameOffsets);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameOffsetSparseSame);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionOffsetSparseSame);
     GV->setAlignment(Align(PtrSize));
   }
@@ -907,7 +902,7 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseDiffOffsets.size());
     Constant *Init = ConstantArray::get(Ty, SparseDiffOffsets);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameOffsetSparseDiff);
+        M, Ty, true, GlobalValue::PrivateLinkage, Init, "");
     GV->setSection(SectionOffsetSparseDiff);
     GV->setAlignment(Align(PtrSize));
   }
