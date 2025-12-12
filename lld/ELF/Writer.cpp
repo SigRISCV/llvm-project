@@ -2170,6 +2170,14 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   //    values. They also might change after adding the thunks.
   finalizeAddressDependentContent();
 
+  // Convert .sig_got entries from {addr, id} to {gotIndex, id} format
+  // This must be done after finalizeAddressDependentContent when GOT addresses
+  // are finalized, but before writing output.
+  if (ctx.arg.emachine == EM_RISCV) {
+    llvm::TimeTraceScope timeScope("Convert SigMode GOT");
+    convertSigGotInPlace<ELFT>(ctx);
+  }
+
   // All information needed for OutputSection part of Map file is available.
   if (errCount(ctx))
     return;
