@@ -9114,7 +9114,7 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
   // mode.
   if (isPositionIndependent() || Subtarget.allowTaggedGlobals() || Subtarget.isSigModeSupport()) {
     SDValue Addr = getTargetNode(N, DL, Ty, DAG, 0);
-    if (IsLocal && !Subtarget.allowTaggedGlobals())
+    if (IsLocal && !Subtarget.allowTaggedGlobals() && !Subtarget.isSigModeSupport())
       // Use PC-relative addressing to access the symbol. This generates the
       // pattern (PseudoLLA sym), which expands to (addi (auipc %pcrel_hi(sym))
       // %pcrel_lo(auipc)).
