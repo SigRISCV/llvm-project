@@ -242,6 +242,16 @@ void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
     if (GV.isThreadLocal())
       continue;
 
+    if (GV.getType()->getAddressSpace() == 100) {
+      // Address space 100 doesn't need ID
+      continue;
+    }
+
+    if (!containsPointer(GV.getValueType())) {
+      // Only Data Region Doesn't need Unique ID
+      continue;
+    }
+
     // Create GOT entry for this global
     // GOT entries: DataID = 0xFFFFFF (implicit), PointToID = 1, 2, 3, ...
     GOTEntry Entry;
@@ -265,18 +275,26 @@ uint32_t RISCVCollectGlobalPointers::findGOTPointToID(const GlobalValue *GV) {
       return It->second.PointToID;
   }
   
-  // Functions and external globals get ExternalPointToID
+  // Dummy and external globals get ExternalPointToID
+  // Function globals will not enter this function
   return ExternalPointToID;
 }
 
 uint32_t RISCVCollectGlobalPointers::getPointToID(Constant *C) {
   // Null pointer
-  if (isa<ConstantPointerNull>(C))
-    return NullPointToID;
+  if (isa<ConstantPointerNull>(C)) {
+    unsigned AS = C->getType()->getPointerAddressSpace();
+    if (AS == 100) {
+      return NullPointToID;
+    } else {
+      return ExternalPointToID;
+    }
+  }
 
   // Undef value
-  if (isa<UndefValue>(C))
+  if (isa<UndefValue>(C)) {
     return NullPointToID;
+  }
 
   // Check if pointing to address space 100
   if (C->getType()->isPointerTy()) {
