@@ -10,28 +10,41 @@
 // a pointer relationship table for SigMode runtime processing.
 //
 // Each entry has two IDs:
-// - DataID: The ID of the data region this entry belongs to
-// - PointToID: The ID of the data region this entry points to
+// - DataID (32-bit): The ID of the data region this entry belongs to
+// - PointToID (32-bit): The ID of the data region this entry points to
 //
 // GOT entries: DataID = 0xFFFFFF (implicit), PointToID = 1, 2, 3, ...
-// Output format: { addr, PointToID } (DataID is always 0xFFFFFF, not stored)
+// Output format: { addr(64), PointToID(32) } (DataID is always 0xFFFFFF, not stored)
 //
-// Pointer entries are stored in compressed formats to reduce table size:
+// Pointer entries use Header-Data Separation for compact storage:
+// (addr/count/offset are 64-bit, DataID/PointToID are 32-bit)
 //
-// Type1 (ContiguousDifferent): Contiguous pointers with different PointToIDs
-//   Format: { type=1, addr, DataID, count, [PointToID...] }
-//
-// Type2 (ContiguousSame): Contiguous pointers with same PointToID  
-//   Format: { type=2, addr, DataID, count, PointToID }
-//
-// Type3 (SparseDifferent): Non-contiguous pointers with different PointToIDs
-//   Format: { type=3, addr, DataID, count, [(offset, PointToID)...] }
-//
-// Type4 (SparseSame): Non-contiguous pointers with same PointToID
-//   Format: { type=4, addr, DataID, count, PointToID, [offset...] }
+// === 5 Header Sections (.sig_ptr_header_*) ===
 //
 // Type5 (Single): Single pointer
-//   Format: { type=5, addr, DataID, PointToID }
+//   Header: { addr(64), DataID(32), PointToID(32) }
+//
+// Type2 (ContiguousSame): Contiguous pointers with same PointToID  
+//   Header: { addr(64), count(64), DataID(32), PointToID(32) }
+//
+// Type1 (ContiguousDifferent): Contiguous pointers with different PointToIDs
+//   Header: { addr(64), count(64) }
+//
+// Type4 (SparseSame): Non-contiguous pointers with same PointToID
+//   Header: { addr(64), count(64), DataID(32), PointToID(32) }
+//
+// Type3 (SparseDifferent): Non-contiguous pointers with different PointToIDs
+//   Header: { addr(64), count(64) }
+//
+// === 4 Data Array Sections ===
+//
+// .sig_id_contig_diff: [DataID(32), PointToID(32)[count]]...  (combined per entry)
+// .sig_id_sparse_diff: [DataID(32), PointToID(32)[count]]...  (combined per entry)
+// .sig_offset_sparse_same: offset(64)[]  (separate)
+// .sig_offset_sparse_diff: offset(64)[]  (separate)
+//
+// === Count Section (.sig_ptr_header_counter) ===
+// All header counts are placed here.
 //
 //===----------------------------------------------------------------------===//
 
@@ -112,6 +125,55 @@ public:
   }
 
   bool runOnModule(Module &M) override;
+
+  // =========== Section Names ===========
+  // GOT section
+  static constexpr const char *SectionGOT = ".sig_got";
+  
+  // Counter section (all counts go here)
+  static constexpr const char *SectionCounter = ".sig_ptr_header_counter";
+  
+  // Header sections (5 types)
+  static constexpr const char *SectionHeaderSingle = ".sig_ptr_header_single";
+  static constexpr const char *SectionHeaderContigSame = ".sig_ptr_header_contig_same";
+  static constexpr const char *SectionHeaderContigDiff = ".sig_ptr_header_contig_diff";
+  static constexpr const char *SectionHeaderSparseSame = ".sig_ptr_header_sparse_same";
+  static constexpr const char *SectionHeaderSparseDiff = ".sig_ptr_header_sparse_diff";
+  
+  // ID data sections (2 types: contig_diff, sparse_diff)
+  static constexpr const char *SectionIDContigDiff = ".sig_id_contig_diff";
+  static constexpr const char *SectionIDSparseDiff = ".sig_id_sparse_diff";
+  
+  // Offset data sections (2 types: sparse_same, sparse_diff)
+  static constexpr const char *SectionOffsetSparseSame = ".sig_offset_sparse_same";
+  static constexpr const char *SectionOffsetSparseDiff = ".sig_offset_sparse_diff";
+  
+  // =========== Global Variable Names ===========
+  // GOT table
+  static constexpr const char *GVNameGOT = "__sig_got";
+  static constexpr const char *GVNameGOTCount = "__sig_got_count";
+  
+  // Header tables
+  static constexpr const char *GVNameHeaderSingle = "__sig_ptr_header_single";
+  static constexpr const char *GVNameHeaderContigSame = "__sig_ptr_header_contig_same";
+  static constexpr const char *GVNameHeaderContigDiff = "__sig_ptr_header_contig_diff";
+  static constexpr const char *GVNameHeaderSparseSame = "__sig_ptr_header_sparse_same";
+  static constexpr const char *GVNameHeaderSparseDiff = "__sig_ptr_header_sparse_diff";
+  
+  // Header counts
+  static constexpr const char *GVNameHeaderSingleCount = "__sig_ptr_header_single_count";
+  static constexpr const char *GVNameHeaderContigSameCount = "__sig_ptr_header_contig_same_count";
+  static constexpr const char *GVNameHeaderContigDiffCount = "__sig_ptr_header_contig_diff_count";
+  static constexpr const char *GVNameHeaderSparseSameCount = "__sig_ptr_header_sparse_same_count";
+  static constexpr const char *GVNameHeaderSparseDiffCount = "__sig_ptr_header_sparse_diff_count";
+  
+  // ID data arrays
+  static constexpr const char *GVNameIDContigDiff = "__sig_id_contig_diff";
+  static constexpr const char *GVNameIDSparseDiff = "__sig_id_sparse_diff";
+  
+  // Offset data arrays
+  static constexpr const char *GVNameOffsetSparseSame = "__sig_offset_sparse_same";
+  static constexpr const char *GVNameOffsetSparseDiff = "__sig_offset_sparse_diff";
 
 private:
   // Map from GlobalVariable to its GOT entry
@@ -593,212 +655,275 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
 
     GlobalVariable *GOTTableGV = new GlobalVariable(
         M, GOTTableTy, /*isConstant=*/true, GlobalValue::ExternalLinkage,
-        GOTTableInit, "__sig_got_table");
-    GOTTableGV->setSection(".sig_got_table");
+        GOTTableInit, GVNameGOT);
+    GOTTableGV->setSection(SectionGOT);
     GOTTableGV->setAlignment(Align(PtrSize));
 
-    // Count placed in .sig_count section (all counts in one section)
+    // Count placed in .sig_ptr_header_counter section (all counts in one section)
     GlobalVariable *GOTSizeGV = new GlobalVariable(
         M, I32Ty, /*isConstant=*/true, GlobalValue::ExternalLinkage,
         ConstantInt::get(I32Ty, GOTTableEntries.size()),
-        "__sig_got_count");
-    GOTSizeGV->setSection(".sig_count");
+        GVNameGOTCount);
+    GOTSizeGV->setSection(SectionCounter);
   }
 
   // === Generate Compressed Pointer Tables ===
-  // Each type generates a single byte stream with header+data combined
+  // Header-Data Separation Mode:
+  // - 5 Header sections (fixed-length entries)
+  // - 4 Data array sections (variable-length data)
+  //
+  // addr/count/offset are 64-bit (ptr-sized), DataID/PointToID are 32-bit
   
-  // Type5 (Single): { addr, DataID, PointToID }
-  SmallVector<Constant *, 32> SingleEntries;
-  StructType *SingleEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I32Ty, I32Ty});
+  // ========== Header Sections ==========
   
-  // Type2 (ContiguousSame): { addr, DataID, count, PointToID }
-  SmallVector<Constant *, 32> ContiguousSameEntries;
-  StructType *ContiguousSameEntryTy = StructType::get(Ctx, 
-      {PtrSizedIntTy, I32Ty, I32Ty, I32Ty});
+  // Type5 (Single) Header: { addr(64), DataID(32), PointToID(32) }
+  SmallVector<Constant *, 32> SingleHeaders;
+  StructType *SingleHeaderTy = StructType::get(Ctx, {PtrSizedIntTy, I32Ty, I32Ty});
   
-  // Type1 (ContiguousDifferent): Combined as byte stream
-  // Each entry: { addr, DataID, count, PointToID[count] }
-  SmallVector<Constant *, 256> ContiguousDiffStream;
-  uint32_t ContiguousDiffCount = 0;
+  // Type2 (ContiguousSame) Header: { addr(64), count(64), DataID(32), PointToID(32) }
+  SmallVector<Constant *, 32> ContiguousSameHeaders;
+  StructType *ContiguousSameHeaderTy = StructType::get(Ctx, 
+      {PtrSizedIntTy, PtrSizedIntTy, I32Ty, I32Ty});
   
-  // Type4 (SparseSame): Combined as byte stream
-  // Each entry: { addr, DataID, count, PointToID, offset[count] }
-  SmallVector<Constant *, 256> SparseSameStream;
-  uint32_t SparseSameCount = 0;
+  // Type1 (ContiguousDifferent) Header: { addr(64), count(64) }
+  // Data: ID array = DataID + PointToID[count] (32-bit each, combined)
+  SmallVector<Constant *, 32> ContiguousDiffHeaders;
+  StructType *ContiguousDiffHeaderTy = StructType::get(Ctx, {PtrSizedIntTy, PtrSizedIntTy});
+  SmallVector<Constant *, 256> ContiguousDiffIDs;  // DataID + PointToID[] combined
   
-  // Type3 (SparseDifferent): Combined as byte stream
-  // Each entry: { addr, DataID, count, (offset, PointToID)[count] }
-  SmallVector<Constant *, 256> SparseDiffStream;
-  uint32_t SparseDiffCount = 0;
+  // Type4 (SparseSame) Header: { addr(64), count(64), DataID(32), PointToID(32) }
+  // Data: Offset array (64-bit each)
+  SmallVector<Constant *, 32> SparseSameHeaders;
+  StructType *SparseSameHeaderTy = StructType::get(Ctx, 
+      {PtrSizedIntTy, PtrSizedIntTy, I32Ty, I32Ty});
+  SmallVector<Constant *, 256> SparseSameOffsets;  // offset[](64) array
+  
+  // Type3 (SparseDifferent) Header: { addr(64), count(64) }
+  // Data: ID array = DataID + PointToID[count] (32-bit each, combined)
+  // Data: Offset array (64-bit each)
+  SmallVector<Constant *, 32> SparseDiffHeaders;
+  StructType *SparseDiffHeaderTy = StructType::get(Ctx, {PtrSizedIntTy, PtrSizedIntTy});
+  SmallVector<Constant *, 256> SparseDiffIDs;      // DataID + PointToID[] combined
+  SmallVector<Constant *, 256> SparseDiffOffsets;  // offset[](64) array
 
   for (const PointerGroup &Group : PointerGroups) {
     Constant *GVPtr = Group.ContainingGV;
     
     switch (Group.Type) {
     case PtrGroupType::Single: {
+      // Header: { addr(64), DataID(32), PointToID(32) }
       const PointerInfo &P = Group.Ptrs[0];
       Constant *OffsetConst = ConstantInt::get(PtrSizedIntTy, P.Offset);
       Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
       Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
       
-      Constant *Entry = ConstantStruct::get(SingleEntryTy,
+      Constant *Header = ConstantStruct::get(SingleHeaderTy,
           {Addr, ConstantInt::get(I32Ty, Group.DataID),
            ConstantInt::get(I32Ty, P.PointToID)});
-      SingleEntries.push_back(Entry);
+      SingleHeaders.push_back(Header);
       break;
     }
     
     case PtrGroupType::ContiguousSame: {
+      // Header: { addr(64), count(64), DataID(32), PointToID(32) }
       const PointerInfo &P = Group.Ptrs[0];
       Constant *OffsetConst = ConstantInt::get(PtrSizedIntTy, P.Offset);
       Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
       Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
       
-      Constant *Entry = ConstantStruct::get(ContiguousSameEntryTy,
-          {Addr, ConstantInt::get(I32Ty, Group.DataID),
-           ConstantInt::get(I32Ty, Group.Ptrs.size()),
+      Constant *Header = ConstantStruct::get(ContiguousSameHeaderTy,
+          {Addr, ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size()),
+           ConstantInt::get(I32Ty, Group.DataID),
            ConstantInt::get(I32Ty, Group.CommonPointToID)});
-      ContiguousSameEntries.push_back(Entry);
+      ContiguousSameHeaders.push_back(Header);
       break;
     }
     
     case PtrGroupType::ContiguousDifferent: {
-      // Format: addr (ptr-sized), DataID (i32), count (i32), PointToID[count] (i32 each)
-      // Store as: [addr_low, addr_high (if 64-bit), DataID, count, PointToID...]
+      // Header: { addr(64), count(64) }
       const PointerInfo &P = Group.Ptrs[0];
       Constant *OffsetConst = ConstantInt::get(PtrSizedIntTy, P.Offset);
       Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
       Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
       
-      // Store address directly as ptr-sized value
-      ContiguousDiffStream.push_back(Addr);
-      ContiguousDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.DataID));
-      ContiguousDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size()));
+      Constant *Header = ConstantStruct::get(ContiguousDiffHeaderTy,
+          {Addr, ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size())});
+      ContiguousDiffHeaders.push_back(Header);
       
+      // Data: Combined ID segment = DataID(32) + PointToID[count](32 each)
+      ContiguousDiffIDs.push_back(ConstantInt::get(I32Ty, Group.DataID));
       for (const PointerInfo &PI : Group.Ptrs) {
-        ContiguousDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, PI.PointToID));
+        ContiguousDiffIDs.push_back(ConstantInt::get(I32Ty, PI.PointToID));
       }
-      ++ContiguousDiffCount;
       break;
     }
     
     case PtrGroupType::SparseSame: {
-      // Format: addr (ptr-sized), DataID, count, PointToID, offset[count]
+      // Header: { addr(64), count(64), DataID(32), PointToID(32) }
       Constant *Addr = ConstantExpr::getPtrToInt(GVPtr, PtrSizedIntTy);
       
-      SparseSameStream.push_back(Addr);
-      SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.DataID));
-      SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.Offsets.size()));
-      SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.CommonPointToID));
+      Constant *Header = ConstantStruct::get(SparseSameHeaderTy,
+          {Addr, ConstantInt::get(PtrSizedIntTy, Group.Offsets.size()),
+           ConstantInt::get(I32Ty, Group.DataID),
+           ConstantInt::get(I32Ty, Group.CommonPointToID)});
+      SparseSameHeaders.push_back(Header);
       
+      // Data: offset[count](64 each) - separate offset array for SparseSame
       for (uint64_t Off : Group.Offsets) {
-        SparseSameStream.push_back(ConstantInt::get(PtrSizedIntTy, Off));
+        SparseSameOffsets.push_back(ConstantInt::get(PtrSizedIntTy, Off));
       }
-      ++SparseSameCount;
       break;
     }
     
     case PtrGroupType::SparseDifferent: {
-      // Format: addr (ptr-sized), DataID, count, (offset, PointToID)[count]
+      // Header: { addr(64), count(64) }
       Constant *Addr = ConstantExpr::getPtrToInt(GVPtr, PtrSizedIntTy);
       
-      SparseDiffStream.push_back(Addr);
-      SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.DataID));
-      SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size()));
+      Constant *Header = ConstantStruct::get(SparseDiffHeaderTy,
+          {Addr, ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size())});
+      SparseDiffHeaders.push_back(Header);
       
+      // Data: Combined ID segment = DataID(32) + PointToID[count](32 each)
+      SparseDiffIDs.push_back(ConstantInt::get(I32Ty, Group.DataID));
       for (const PointerInfo &PI : Group.Ptrs) {
-        SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, PI.Offset));
-        SparseDiffStream.push_back(ConstantInt::get(PtrSizedIntTy, PI.PointToID));
+        SparseDiffIDs.push_back(ConstantInt::get(I32Ty, PI.PointToID));
       }
-      ++SparseDiffCount;
+      
+      // Data: offset[count](64 each) - separate offset array for SparseDiff
+      for (const PointerInfo &PI : Group.Ptrs) {
+        SparseDiffOffsets.push_back(ConstantInt::get(PtrSizedIntTy, PI.Offset));
+      }
       break;
     }
     }
   }
 
-  // Generate global variables for each table type
-  // Each type has its own section for linker merging
-  // All counts go to .sig_count section
+  // ========== Generate Global Variables ==========
+  // 5 Header sections + 4 Data array sections = 9 sections total
+  // All counts go to .sig_ptr_header_counter section
   
-  // Type5 Single entries
-  if (!SingleEntries.empty()) {
-    ArrayType *Ty = ArrayType::get(SingleEntryTy, SingleEntries.size());
-    Constant *Init = ConstantArray::get(Ty, SingleEntries);
+  // === Header Section 1: Type5 Single ===
+  if (!SingleHeaders.empty()) {
+    ArrayType *Ty = ArrayType::get(SingleHeaderTy, SingleHeaders.size());
+    Constant *Init = ConstantArray::get(Ty, SingleHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_single");
-    GV->setSection(".sig_ptr_single");
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderSingle);
+    GV->setSection(SectionHeaderSingle);
     GV->setAlignment(Align(PtrSize));
     
     GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, SingleEntries.size()), "__sig_ptr_single_count");
-    CountGV->setSection(".sig_count");
+        ConstantInt::get(I32Ty, SingleHeaders.size()), GVNameHeaderSingleCount);
+    CountGV->setSection(SectionCounter);
   }
   
-  // Type2 ContiguousSame entries
-  if (!ContiguousSameEntries.empty()) {
-    ArrayType *Ty = ArrayType::get(ContiguousSameEntryTy, ContiguousSameEntries.size());
-    Constant *Init = ConstantArray::get(Ty, ContiguousSameEntries);
+  // === Header Section 2: Type2 ContiguousSame ===
+  if (!ContiguousSameHeaders.empty()) {
+    ArrayType *Ty = ArrayType::get(ContiguousSameHeaderTy, ContiguousSameHeaders.size());
+    Constant *Init = ConstantArray::get(Ty, ContiguousSameHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_contig_same");
-    GV->setSection(".sig_ptr_contig_same");
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderContigSame);
+    GV->setSection(SectionHeaderContigSame);
     GV->setAlignment(Align(PtrSize));
     
     GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, ContiguousSameEntries.size()), "__sig_ptr_contig_same_count");
-    CountGV->setSection(".sig_count");
+        ConstantInt::get(I32Ty, ContiguousSameHeaders.size()), GVNameHeaderContigSameCount);
+    CountGV->setSection(SectionCounter);
   }
   
-  // Type1 ContiguousDifferent - combined stream (ptr-sized elements)
-  if (!ContiguousDiffStream.empty()) {
-    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, ContiguousDiffStream.size());
-    Constant *Init = ConstantArray::get(Ty, ContiguousDiffStream);
+  // === Header Section 3: Type1 ContiguousDifferent ===
+  if (!ContiguousDiffHeaders.empty()) {
+    ArrayType *Ty = ArrayType::get(ContiguousDiffHeaderTy, ContiguousDiffHeaders.size());
+    Constant *Init = ConstantArray::get(Ty, ContiguousDiffHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_contig_diff");
-    GV->setSection(".sig_ptr_contig_diff");
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderContigDiff);
+    GV->setSection(SectionHeaderContigDiff);
     GV->setAlignment(Align(PtrSize));
     
     GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, ContiguousDiffCount), "__sig_ptr_contig_diff_count");
-    CountGV->setSection(".sig_count");
+        ConstantInt::get(I32Ty, ContiguousDiffHeaders.size()), GVNameHeaderContigDiffCount);
+    CountGV->setSection(SectionCounter);
   }
   
-  // Type4 SparseSame - combined stream (ptr-sized elements)
-  if (!SparseSameStream.empty()) {
-    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseSameStream.size());
-    Constant *Init = ConstantArray::get(Ty, SparseSameStream);
+  // === Header Section 4: Type4 SparseSame ===
+  if (!SparseSameHeaders.empty()) {
+    ArrayType *Ty = ArrayType::get(SparseSameHeaderTy, SparseSameHeaders.size());
+    Constant *Init = ConstantArray::get(Ty, SparseSameHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_sparse_same");
-    GV->setSection(".sig_ptr_sparse_same");
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderSparseSame);
+    GV->setSection(SectionHeaderSparseSame);
     GV->setAlignment(Align(PtrSize));
     
     GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, SparseSameCount), "__sig_ptr_sparse_same_count");
-    CountGV->setSection(".sig_count");
+        ConstantInt::get(I32Ty, SparseSameHeaders.size()), GVNameHeaderSparseSameCount);
+    CountGV->setSection(SectionCounter);
   }
   
-  // Type3 SparseDifferent - combined stream (ptr-sized elements)
-  if (!SparseDiffStream.empty()) {
-    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseDiffStream.size());
-    Constant *Init = ConstantArray::get(Ty, SparseDiffStream);
+  // === Header Section 5: Type3 SparseDifferent ===
+  if (!SparseDiffHeaders.empty()) {
+    ArrayType *Ty = ArrayType::get(SparseDiffHeaderTy, SparseDiffHeaders.size());
+    Constant *Init = ConstantArray::get(Ty, SparseDiffHeaders);
     GlobalVariable *GV = new GlobalVariable(
-        M, Ty, true, GlobalValue::ExternalLinkage, Init, "__sig_ptr_sparse_diff");
-    GV->setSection(".sig_ptr_sparse_diff");
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameHeaderSparseDiff);
+    GV->setSection(SectionHeaderSparseDiff);
     GV->setAlignment(Align(PtrSize));
     
     GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::ExternalLinkage,
-        ConstantInt::get(I32Ty, SparseDiffCount), "__sig_ptr_sparse_diff_count");
-    CountGV->setSection(".sig_count");
+        ConstantInt::get(I32Ty, SparseDiffHeaders.size()), GVNameHeaderSparseDiffCount);
+    CountGV->setSection(SectionCounter);
+  }
+  
+  // === Data Array Section 1: ContiguousDiff IDs (DataID + PointToID[] combined, 32-bit each) ===
+  if (!ContiguousDiffIDs.empty()) {
+    ArrayType *Ty = ArrayType::get(I32Ty, ContiguousDiffIDs.size());
+    Constant *Init = ConstantArray::get(Ty, ContiguousDiffIDs);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameIDContigDiff);
+    GV->setSection(SectionIDContigDiff);
+    GV->setAlignment(Align(4));
+  }
+  
+  // === Data Array Section 2: SparseDiff IDs (DataID + PointToID[] combined, 32-bit each) ===
+  if (!SparseDiffIDs.empty()) {
+    ArrayType *Ty = ArrayType::get(I32Ty, SparseDiffIDs.size());
+    Constant *Init = ConstantArray::get(Ty, SparseDiffIDs);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameIDSparseDiff);
+    GV->setSection(SectionIDSparseDiff);
+    GV->setAlignment(Align(4));
+  }
+  
+  // === Data Array Section 3: SparseSame Offsets (64-bit each) ===
+  if (!SparseSameOffsets.empty()) {
+    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseSameOffsets.size());
+    Constant *Init = ConstantArray::get(Ty, SparseSameOffsets);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameOffsetSparseSame);
+    GV->setSection(SectionOffsetSparseSame);
+    GV->setAlignment(Align(PtrSize));
+  }
+  
+  // === Data Array Section 4: SparseDiff Offsets (64-bit each) ===
+  if (!SparseDiffOffsets.empty()) {
+    ArrayType *Ty = ArrayType::get(PtrSizedIntTy, SparseDiffOffsets.size());
+    Constant *Init = ConstantArray::get(Ty, SparseDiffOffsets);
+    GlobalVariable *GV = new GlobalVariable(
+        M, Ty, true, GlobalValue::ExternalLinkage, Init, GVNameOffsetSparseDiff);
+    GV->setSection(SectionOffsetSparseDiff);
+    GV->setAlignment(Align(PtrSize));
   }
 
   LLVM_DEBUG(dbgs() << "Generated GOT table with " << GOTTableEntries.size()
                     << " entries\n");
-  LLVM_DEBUG(dbgs() << "Generated pointer tables:\n"
-                    << "  Single: " << SingleEntries.size() << "\n"
-                    << "  ContiguousSame: " << ContiguousSameEntries.size() << "\n"
-                    << "  ContiguousDiff: " << ContiguousDiffCount << "\n"
-                    << "  SparseSame: " << SparseSameCount << "\n"
-                    << "  SparseDiff: " << SparseDiffCount << "\n");
+  LLVM_DEBUG(dbgs() << "Generated pointer tables (Header-Data Separation):\n"
+                    << "  Single Headers: " << SingleHeaders.size() << "\n"
+                    << "  ContiguousSame Headers: " << ContiguousSameHeaders.size() << "\n"
+                    << "  ContiguousDiff Headers: " << ContiguousDiffHeaders.size() << "\n"
+                    << "  SparseSame Headers: " << SparseSameHeaders.size() << "\n"
+                    << "  SparseDiff Headers: " << SparseDiffHeaders.size() << "\n"
+                    << "  ContiguousDiff IDs: " << ContiguousDiffIDs.size() << "\n"
+                    << "  SparseDiff IDs: " << SparseDiffIDs.size() << "\n"
+                    << "  SparseSame Offsets: " << SparseSameOffsets.size() << "\n"
+                    << "  SparseDiff Offsets: " << SparseDiffOffsets.size() << "\n");
 }
 
 bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
