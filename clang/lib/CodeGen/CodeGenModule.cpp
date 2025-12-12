@@ -5403,6 +5403,9 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
   }
 
   auto DAddrSpace = GetGlobalVarAddressSpace(D);
+  if (Context.getTargetInfo().isSigModeSupported() && AddrSpace == LangAS::sigmode_raw) {
+    DAddrSpace = LangAS::sigmode_raw;
+  }
 
   auto *GV = new llvm::GlobalVariable(
       getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
