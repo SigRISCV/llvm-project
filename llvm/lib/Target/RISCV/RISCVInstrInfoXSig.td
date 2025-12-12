@@ -49,6 +49,13 @@ def SETNEWID : RVInstI<0b011, OPC_CUSTOM_2, (outs GPR:$rd),
                        "setnewid", "$rd, $rs1, $imm12">,
                Sched<[WriteIALU, ReadIALU]>;
 
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
+def DEBUG : RVInstI<0b111, OPC_CUSTOM_2, (outs GPR:$rd),
+                    (ins GPR:$rs1, simm12_lo:$imm12),
+                    "debug", "$rd, $rs1, $imm12">,
+            Sched<[]>;
+def : InstAlias<"debug", (DEBUG X0, X0, 0)>;
+
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0, isBarrier = 1 in
 def SWITCHS : RVInstR<0b0000000, 0b100, OPC_CUSTOM_2, (outs GPR:$rd),
                       (ins GPR:$rs1, GPR:$rs2),
