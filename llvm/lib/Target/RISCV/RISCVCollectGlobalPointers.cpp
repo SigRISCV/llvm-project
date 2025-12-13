@@ -181,6 +181,9 @@ public:
   // External reference sections
   static constexpr const char *SectionExtFixupHeader = ".sig_ext_got";
   static constexpr const char *SectionExtFixupData = ".sig_ext_fixup_data";
+  
+  // Symbol name string table section
+  static constexpr const char *SectionSymtab = ".sig_symtab";
 
 private:
   // Map from GlobalVariable to its GOT entry (local globals, ID from 1)
@@ -188,7 +191,9 @@ private:
   
   // Map from external GlobalValue to its ExtGOT entry (external globals, ID from 0xFFFFFE decreasing)
   DenseMap<const GlobalVariable *, GOTEntry> ExtGOTMap;
-  DenseMap<uint32_t, const GlobalVariable *> ExtGOTReverseMap; // ExtID -> GV
+  
+  // Reverse map from ExtID to GOTEntry pointer (built after ExtGOTMap is complete)
+  DenseMap<uint32_t, const GOTEntry *> ExtGOTIDMap;  // ExtID -> GOTEntry*
   
   // Next external ID to assign (starts at 0xFFFFFE, decreases)
   uint32_t NextExtID = ExtGOTStartID;
@@ -201,6 +206,9 @@ private:
   
   // External fixup information (collected during section generation)
   DenseMap<uint32_t, ExtFixupInfo> ExtFixupMap;  // ExtID -> ExtFixupInfo
+  
+  // Symbol name offsets in the .sig_symtab string table
+  DenseMap<const GlobalVariable *, uint64_t> SymNameOffsets;
 
   // Build the GOT map for all global variables
   void buildGOTMap(Module &M, const DataLayout &DL);
@@ -355,7 +363,6 @@ void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
     if (GV.isDeclaration()) {
       Entry.PointToID = NextExtID--;
       ExtGOTMap[&GV] = Entry;
-      ExtGOTReverseMap[Entry.PointToID] = &GV;
       ++NumExtGOTEntries;
     } else {
       Entry.PointToID = NextPointToID++;
@@ -371,6 +378,11 @@ void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
   // Record the maximum local ID assigned
   MaxLocalID = NextPointToID - 1;
   LLVM_DEBUG(dbgs() << "MaxLocalID = " << MaxLocalID << "\n");
+  
+  // Build ExtGOTIDMap from ExtGOTMap for quick ExtID -> GOTEntry* lookup
+  for (auto &KV : ExtGOTMap) {
+    ExtGOTIDMap[KV.second.PointToID] = &KV.second;
+  }
 }
 
 uint32_t RISCVCollectGlobalPointers::findGOTPointToID(const GlobalValue *GV) {
@@ -397,7 +409,7 @@ void RISCVCollectGlobalPointers::recordExtFixupLocation(uint32_t ID,
     if (Info.ExtID == 0) {
       Info.ExtID = ID;
       // Find the external GV from ExtGOTMap
-      Info.GV = ExtGOTReverseMap[ID];
+      Info.GV = ExtGOTIDMap[ID]->GV;
     }
     Info.Locations.push_back({SecType, Offset});
   }
@@ -684,9 +696,54 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
   Type *I64Ty = Type::getInt64Ty(Ctx);
   Type *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
 
+  // === Build Symbol Name String Table ===
+  // Collect all symbol names and their offsets in the string table
+  // Only include externally visible symbols (other files may reference them)
+  std::string SymtabString;
+  SymNameOffsets.clear();  // Clear member variable
+  
+  // Add externally visible GOTMap entries (for regular .sig_got)
+  // Skip static symbols (internal/private linkage) as they can't be referenced externally
+  for (auto &KV : GOTMap) {
+    const GlobalVariable *GV = KV.first;
+    // Only add externally visible symbols to symtab
+    if (!GV->hasLocalLinkage()) {
+      SymNameOffsets[GV] = SymtabString.size();
+      SymtabString += GV->getName().str();
+      SymtabString += '\0';  // Null terminator
+    }
+  }
+  
+  // Add only ExtFixupMap entries that are actually used (for .sig_ext_fixup)
+  // This avoids adding unnecessary entries from ExtGOTMap
+  // Uses ExtGOTIDMap (member variable built in buildGOTMap)
+  for (auto &KV : ExtFixupMap) {
+    uint32_t ExtID = KV.first;
+    auto It = ExtGOTIDMap.find(ExtID);
+    if (It != ExtGOTIDMap.end()) {
+      const GlobalVariable *GV = It->second->GV;
+      // Only add if not already in SymNameOffsets (from GOTMap)
+      if (SymNameOffsets.find(GV) == SymNameOffsets.end()) {
+        SymNameOffsets[GV] = SymtabString.size();
+        SymtabString += GV->getName().str();
+        SymtabString += '\0';  // Null terminator
+      }
+    }
+  }
+  
+  // Create the symbol name string table global variable
+  if (!SymtabString.empty()) {
+    Constant *SymtabInit = ConstantDataArray::getString(Ctx, SymtabString, false);
+    GlobalVariable *SymtabGV = new GlobalVariable(
+        M, SymtabInit->getType(), true, GlobalValue::PrivateLinkage,
+        SymtabInit, "");
+    SymtabGV->setSection(SectionSymtab);
+    SymtabGV->setAlignment(Align(1));
+  }
+
   // === Generate GOT Table ===
-  // New format: { addr(64), id(64), sym_index(64) } = 24 bytes
-  // sym_index is a relocation to the symbol for linker resolution
+  // New format: { addr(64), id(64), sym_name_offset(64) } = 24 bytes
+  // sym_name_offset is the offset of the symbol name in .sig_symtab
   // Sort by PointToID to ensure consistent ordering
   
   SmallVector<const GOTEntry *, 64> SortedGOTEntries;
@@ -698,17 +755,23 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
   });
   
   SmallVector<Constant *, 64> GOTTableEntries;
-  // { addr(64), id(64), sym(64) }
+  // { addr(64), id(64), sym_name_offset(64) }
   StructType *GOTEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I64Ty, I64Ty});
 
   for (const GOTEntry *Entry : SortedGOTEntries) {
     Constant *GVPtr = ConstantExpr::getPtrToInt(Entry->GV, PtrSizedIntTy);
     Constant *PointToIDConst = ConstantInt::get(I64Ty, Entry->PointToID);
-    // sym is a pointer to the GlobalVariable, will generate relocation
-    Constant *SymPtr = ConstantExpr::getPtrToInt(Entry->GV, I64Ty);
+    // sym_name_offset is the offset of the symbol name in .sig_symtab
+    // Use UINT64_MAX for static symbols (not in symtab) so linker can skip them
+    uint64_t SymNameOffset = UINT64_MAX;  // Default: static symbol
+    auto SymIt = SymNameOffsets.find(Entry->GV);
+    if (SymIt != SymNameOffsets.end()) {
+      SymNameOffset = SymIt->second;
+    }
+    Constant *SymNameOffsetConst = ConstantInt::get(I64Ty, SymNameOffset);
 
     Constant *GOTEntryConst = ConstantStruct::get(GOTEntryTy, 
-                                                   {GVPtr, PointToIDConst, SymPtr});
+                                                   {GVPtr, PointToIDConst, SymNameOffsetConst});
     GOTTableEntries.push_back(GOTEntryConst);
   }
 
@@ -1084,7 +1147,6 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
   LLVMContext &Ctx = M.getContext();
   unsigned PtrSize = DL.getPointerSize();
   IntegerType *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
-  IntegerType *I8Ty = Type::getInt8Ty(Ctx);
   IntegerType *I32Ty = Type::getInt32Ty(Ctx);
 
   DEBUG_FILE << ExtFixupMap.size() << " external fixup entries to process\n";
@@ -1102,7 +1164,7 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
   if (!ExtFixupMap.empty()) {
     StructType *FixupHeaderTy = StructType::get(Ctx, {
         PtrSizedIntTy,  // ext_id
-        PtrSizedIntTy,  // sym_index
+        PtrSizedIntTy,  // sym_name_offset (offset in .sig_symtab)
         PtrSizedIntTy,  // data_offset
         PtrSizedIntTy   // length (number of locations)
     });
@@ -1113,20 +1175,19 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
     uint64_t DataOffset = 0;
     const uint64_t DataEntrySize = PtrSize;  // offset(8)
 
-    llvm::DenseMap<uint32_t, const GOTEntry *> ExtGOTMapLocal;
-    for (auto &KV : ExtGOTMap) {
-      ExtGOTMapLocal[KV.second.PointToID] = &KV.second;
-    }
-    
+    // Use member variable ExtGOTIDMap instead of creating local map
     for (auto &KV : ExtFixupMap) {
       uint32_t ExtID = KV.first;
       const ExtFixupInfo &Info = KV.second;
-      GlobalVariable *GV = ExtGOTMapLocal[ExtID]->GV;
+      GlobalVariable *GV = ExtGOTIDMap[ExtID]->GV;
+      
+      // Get symbol name offset from SymNameOffsets
+      uint64_t SymNameOffset = SymNameOffsets.count(GV) ? SymNameOffsets[GV] : 0;
       
       // Create header entry
       Constant *Header = ConstantStruct::get(FixupHeaderTy, {
           ConstantInt::get(PtrSizedIntTy, ExtID),
-          ConstantExpr::getPtrToInt(GV, PtrSizedIntTy),
+          ConstantInt::get(PtrSizedIntTy, SymNameOffset),
           ConstantInt::get(PtrSizedIntTy, DataOffset),
           ConstantInt::get(PtrSizedIntTy, Info.Locations.size())
       });
@@ -1134,8 +1195,8 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
       
       // Create data entries for all locations
       for (const ExtFixupLocation &Loc : Info.Locations) {
-        uint64_t data = (Loc.Offset & ((1L << 56) -1)) | (static_cast<uint64_t>(Loc.SectionType) << 56);
-        Constant *DataEntry = ConstantInt::get(PtrSizedIntTy, data);
+        uint64_t Data = (Loc.Offset & ((1L << 56) -1)) | (static_cast<uint64_t>(Loc.SectionType) << 56);
+        Constant *DataEntry = ConstantInt::get(PtrSizedIntTy, Data);
         FixupDataEntries.push_back(DataEntry);
         DataOffset += DataEntrySize;
       }
@@ -1204,8 +1265,9 @@ bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
   // Clear any previous data
   GOTMap.clear();
   ExtGOTMap.clear();
+  ExtGOTIDMap.clear();
   ExtFixupMap.clear();
-  ExtGOTReverseMap.clear();
+  SymNameOffsets.clear();
   NextExtID = ExtGOTStartID;  // Reset external ID counter
   MaxLocalID = 0;             // Reset max local ID
   PointerGroups.clear();
