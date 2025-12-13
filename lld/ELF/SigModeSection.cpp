@@ -362,14 +362,30 @@ void SigGotConverter<ELFT>::collectEntries() {
   // .sig_got entry: { addr(64), id(64) } = 16 bytes
   constexpr size_t entrySize = 16;
 
-  for (InputSectionBase *isb : ctx.inputSections) {
-    if (isb->name != sigSectionGOT)
-      continue;
+  // Find the OutputSection for .sig_got
+  OutputSection *sigGotOS = nullptr;
+  for (OutputSection *os : ctx.outputSections) {
+    if (os->name == sigSectionGOT) {
+      sigGotOS = os;
+      break;
+    }
+  }
 
-    auto *sec = dyn_cast<InputSection>(isb);
-    if (!sec)
-      continue;
+  SmallVector<InputSection *, 0> sigGotSections;
+  if (sigGotOS) {
+    // Use getInputSections to get InputSections in their final layout order
+    SmallVector<InputSection *, 0> storage;
+    ArrayRef<InputSection *> sections = getInputSections(*sigGotOS, storage);
+    for (InputSection *sec : sections) {
+      if (sec->name == sigSectionGOT)
+        sigGotSections.push_back(sec);
+    }
+  }
+  
+  if (sigGotSections.empty())
+    return;
 
+  for (auto* sec : sigGotSections) {
     ArrayRef<uint8_t> data = sec->content();
     
     // Build a map from offset to relocation for quick lookup
