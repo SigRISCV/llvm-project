@@ -230,7 +230,6 @@ private:
   // External IDs are between (MaxLocalID, ExtGOTStartID] excluding ExternalPointToID
   // More simply: ID > MaxLocalID && ID <= ExtGOTStartID
   bool isExtID(uint32_t ID) const {
-    DEBUG_FILE;
     return ID > MaxLocalID && ID <= ExtGOTStartID;
   }
   
@@ -404,7 +403,6 @@ void RISCVCollectGlobalPointers::recordExtFixupLocation(uint32_t ID,
                                                          uint64_t Offset) {
   // Only record if ID is in the external range
   if (isExtID(ID)) {
-    DEBUG_FILE << ExtFixupMap.size() << "\n";
     auto &Info = ExtFixupMap[ID];
     if (Info.ExtID == 0) {
       Info.ExtID = ID;
@@ -713,33 +711,6 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
       SymtabString += '\0';  // Null terminator
     }
   }
-  
-  // Add only ExtFixupMap entries that are actually used (for .sig_ext_fixup)
-  // This avoids adding unnecessary entries from ExtGOTMap
-  // Uses ExtGOTIDMap (member variable built in buildGOTMap)
-  for (auto &KV : ExtFixupMap) {
-    uint32_t ExtID = KV.first;
-    auto It = ExtGOTIDMap.find(ExtID);
-    if (It != ExtGOTIDMap.end()) {
-      const GlobalVariable *GV = It->second->GV;
-      // Only add if not already in SymNameOffsets (from GOTMap)
-      if (SymNameOffsets.find(GV) == SymNameOffsets.end()) {
-        SymNameOffsets[GV] = SymtabString.size();
-        SymtabString += GV->getName().str();
-        SymtabString += '\0';  // Null terminator
-      }
-    }
-  }
-  
-  // Create the symbol name string table global variable
-  if (!SymtabString.empty()) {
-    Constant *SymtabInit = ConstantDataArray::getString(Ctx, SymtabString, false);
-    GlobalVariable *SymtabGV = new GlobalVariable(
-        M, SymtabInit->getType(), true, GlobalValue::PrivateLinkage,
-        SymtabInit, "");
-    SymtabGV->setSection(SectionSymtab);
-    SymtabGV->setAlignment(Align(1));
-  }
 
   // === Generate GOT Table ===
   // New format: { addr(64), id(64), sym_name_offset(64) } = 24 bytes
@@ -990,6 +961,31 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     }
   }
 
+  // Add only ExtFixupMap entries that are actually used (for .sig_ext_fixup)
+  // This avoids adding unnecessary entries from ExtGOTMap
+  // Uses ExtGOTIDMap (member variable built in buildGOTMap)
+  for (auto &KV : ExtFixupMap) {
+    uint32_t ExtID = KV.first;
+    auto It = ExtGOTIDMap.find(ExtID);
+    assert (It != ExtGOTIDMap.end());
+    const GlobalVariable *GV = It->second->GV;
+    // Only add if not already in SymNameOffsets (from GOTMap)
+    assert (SymNameOffsets.find(GV) == SymNameOffsets.end());
+    SymNameOffsets[GV] = SymtabString.size();
+    SymtabString += GV->getName().str();
+    SymtabString += '\0';  // Null terminator
+  }
+  
+  // Create the symbol name string table global variable
+  if (!SymtabString.empty()) {
+    Constant *SymtabInit = ConstantDataArray::getString(Ctx, SymtabString, false);
+    GlobalVariable *SymtabGV = new GlobalVariable(
+        M, SymtabInit->getType(), true, GlobalValue::PrivateLinkage,
+        SymtabInit, "");
+    SymtabGV->setSection(SectionSymtab);
+    SymtabGV->setAlignment(Align(1));
+  }
+
   // ========== Generate Global Variables ==========
   // 5 Header sections + 4 Data array sections = 9 sections total
   // All counts go to .sig_ptr_header_counter section
@@ -1149,7 +1145,6 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
   IntegerType *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
   IntegerType *I32Ty = Type::getInt32Ty(Ctx);
 
-  DEBUG_FILE << ExtFixupMap.size() << " external fixup entries to process\n";
   if (ExtFixupMap.empty() && ExtGOTMap.empty()) {
     LLVM_DEBUG(dbgs() << "No external references, skipping ext fixup sections\n");
     GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
@@ -1182,7 +1177,8 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
       GlobalVariable *GV = ExtGOTIDMap[ExtID]->GV;
       
       // Get symbol name offset from SymNameOffsets
-      uint64_t SymNameOffset = SymNameOffsets.count(GV) ? SymNameOffsets[GV] : 0;
+      assert(SymNameOffsets.count(GV) && "External fixup GV missing from SymNameOffsets");
+      uint64_t SymNameOffset = SymNameOffsets[GV];
       
       // Create header entry
       Constant *Header = ConstantStruct::get(FixupHeaderTy, {
