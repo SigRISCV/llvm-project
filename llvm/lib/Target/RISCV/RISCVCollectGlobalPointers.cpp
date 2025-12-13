@@ -56,12 +56,15 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
 
 using namespace llvm;
 
@@ -70,11 +73,25 @@ using namespace llvm;
 
 STATISTIC(NumPointersCollected, "Number of global pointers collected");
 STATISTIC(NumGOTEntries, "Number of GOT entries created");
+STATISTIC(NumExtGOTEntries, "Number of Ext GOT entries created");
 STATISTIC(NumCompressedEntries, "Number of compressed pointer groups");
 
 // Special IDs
-static constexpr uint32_t ExternalPointToID = 0xFFFFFF;
+static constexpr uint32_t ExternalPointToID = 0xFFFFFF;  // Unknown external
 static constexpr uint32_t NullPointToID = 0;
+static constexpr uint32_t ExtGOTStartID = 0xFFFFFE;      // External GOT IDs start here and decrease
+
+// Section type enum for external fixup tracking
+enum class SigSectionType : uint8_t {
+  GOT = 0,
+  HeaderSingle = 1,
+  HeaderContigSame = 2,
+  HeaderContigDiff = 3,
+  HeaderSparseSame = 4,
+  HeaderSparseDiff = 5,
+  IDContigDiff = 6,
+  IDSparseDiff = 7,
+};
 
 // Pointer group types
 enum class PtrGroupType : uint8_t {
@@ -103,11 +120,24 @@ struct PointerGroup {
   SmallVector<uint64_t, 8> Offsets;   // Offsets only (for Type4)
 };
 
-// Structure to represent a GOT entry
+// Structure to represent a GOT entry (local globals)
 struct GOTEntry {
   GlobalVariable *GV;     // The global variable
   uint32_t PointToID;     // The assigned PointToID (1, 2, 3, ...)
   uint64_t Size;          // Size of the global
+};
+
+// Structure to track PointToID location for external fixup
+struct ExtFixupLocation {
+  SigSectionType SectionType;  // Which section contains the PointToID
+  uint64_t Offset;             // Byte offset within that section
+};
+
+// Structure to collect all fixup locations for one external ID
+struct ExtFixupInfo {
+  uint32_t ExtID;                            // The external ID (0xFFFFFE, 0xFFFFFD, ...)
+  const GlobalVariable *GV;                     // The external symbol
+  SmallVector<ExtFixupLocation, 4> Locations; // All PointToID locations
 };
 
 class RISCVCollectGlobalPointers : public ModulePass {
@@ -147,13 +177,30 @@ public:
   // Offset data sections (2 types: sparse_same, sparse_diff)
   static constexpr const char *SectionOffsetSparseSame = ".sig_offset_sparse_same";
   static constexpr const char *SectionOffsetSparseDiff = ".sig_offset_sparse_diff";
+  
+  // External reference sections
+  static constexpr const char *SectionExtFixupHeader = ".sig_ext_got";
+  static constexpr const char *SectionExtFixupData = ".sig_ext_fixup_data";
 
 private:
-  // Map from GlobalVariable to its GOT entry
+  // Map from GlobalVariable to its GOT entry (local globals, ID from 1)
   DenseMap<const GlobalVariable *, GOTEntry> GOTMap;
+  
+  // Map from external GlobalValue to its ExtGOT entry (external globals, ID from 0xFFFFFE decreasing)
+  DenseMap<const GlobalVariable *, GOTEntry> ExtGOTMap;
+  DenseMap<uint32_t, const GlobalVariable *> ExtGOTReverseMap; // ExtID -> GV
+  
+  // Next external ID to assign (starts at 0xFFFFFE, decreases)
+  uint32_t NextExtID = ExtGOTStartID;
+  
+  // Maximum local ID assigned (the highest ID in GOTMap)
+  uint32_t MaxLocalID = 0;
   
   // All pointer groups found
   SmallVector<PointerGroup, 64> PointerGroups;
+  
+  // External fixup information (collected during section generation)
+  DenseMap<uint32_t, ExtFixupInfo> ExtFixupMap;  // ExtID -> ExtFixupInfo
 
   // Build the GOT map for all global variables
   void buildGOTMap(Module &M, const DataLayout &DL);
@@ -168,7 +215,19 @@ private:
   uint32_t getPointToID(Constant *C);
 
   // Find the PointToID when a pointer points to a global value
+  // First checks GOTMap (local), then ExtGOTMap (external), finally returns ExternalPointToID
   uint32_t findGOTPointToID(const GlobalValue *GV);
+  
+  // Check if an ID is in the external range
+  // External IDs are between (MaxLocalID, ExtGOTStartID] excluding ExternalPointToID
+  // More simply: ID > MaxLocalID && ID <= ExtGOTStartID
+  bool isExtID(uint32_t ID) const {
+    DEBUG_FILE;
+    return ID > MaxLocalID && ID <= ExtGOTStartID;
+  }
+  
+  // Record a PointToID location for external fixup tracking
+  void recordExtFixupLocation(uint32_t ID, SigSectionType SecType, uint64_t Offset);
 
   // Collect all pointers in a constant, storing them in a flat list
   void collectAllPointers(Constant *C, const DataLayout &DL,
@@ -188,6 +247,9 @@ private:
 
   // Generate the pointer table section
   void generatePointerTable(Module &M, const DataLayout &DL);
+  
+  // Generate external fixup sections
+  void generateExtFixupSections(Module &M, const DataLayout &DL);
 };
 
 } // end anonymous namespace
@@ -265,10 +327,6 @@ void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
   uint32_t NextPointToID = 1;
 
   for (GlobalVariable &GV : M.globals()) {
-    // Skip declarations
-    if (GV.isDeclaration())
-      continue;
-
     // Skip our own generated tables
     if (GV.getName().starts_with("__sig_"))
       continue;
@@ -291,39 +349,67 @@ void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
     // GOT entries: DataID = 0xFFFFFF (implicit), PointToID = 1, 2, 3, ...
     GOTEntry Entry;
     Entry.GV = &GV;
-    Entry.PointToID = NextPointToID++;
     Entry.Size = DL.getTypeAllocSize(GV.getValueType());
 
-    GOTMap[&GV] = Entry;
-    ++NumGOTEntries;
+
+    if (GV.isDeclaration()) {
+      Entry.PointToID = NextExtID--;
+      ExtGOTMap[&GV] = Entry;
+      ExtGOTReverseMap[Entry.PointToID] = &GV;
+      ++NumExtGOTEntries;
+    } else {
+      Entry.PointToID = NextPointToID++;
+      GOTMap[&GV] = Entry;
+      ++NumGOTEntries;
+    }
 
     LLVM_DEBUG(dbgs() << "GOT Entry: " << GV.getName() 
                       << " PointToID=" << Entry.PointToID
                       << " Size=" << Entry.Size << "\n");
   }
+  
+  // Record the maximum local ID assigned
+  MaxLocalID = NextPointToID - 1;
+  LLVM_DEBUG(dbgs() << "MaxLocalID = " << MaxLocalID << "\n");
 }
 
 uint32_t RISCVCollectGlobalPointers::findGOTPointToID(const GlobalValue *GV) {
-  if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV)) {
-    auto It = GOTMap.find(GVar);
-    if (It != GOTMap.end())
-      return It->second.PointToID;
-  }
+  // First check GOTMap (local globals)
+  const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV);
+  auto It = GOTMap.find(GVar);
+  if (It != GOTMap.end())
+    return It->second.PointToID;
+  auto ExtIt = ExtGOTMap.find(GVar);
+  if (ExtIt != ExtGOTMap.end())
+    return ExtIt->second.PointToID;
   
-  // Dummy and external globals get ExternalPointToID
-  // Function globals will not enter this function
+  // Function pointers or truly unknown - return ExternalPointToID
   return ExternalPointToID;
+}
+
+void RISCVCollectGlobalPointers::recordExtFixupLocation(uint32_t ID, 
+                                                         SigSectionType SecType,
+                                                         uint64_t Offset) {
+  // Only record if ID is in the external range
+  if (isExtID(ID)) {
+    DEBUG_FILE << ExtFixupMap.size() << "\n";
+    auto &Info = ExtFixupMap[ID];
+    if (Info.ExtID == 0) {
+      Info.ExtID = ID;
+      // Find the external GV from ExtGOTMap
+      Info.GV = ExtGOTReverseMap[ID];
+    }
+    Info.Locations.push_back({SecType, Offset});
+  }
 }
 
 uint32_t RISCVCollectGlobalPointers::getPointToID(Constant *C) {
   // Null pointer
   if (isa<ConstantPointerNull>(C)) {
     unsigned AS = C->getType()->getPointerAddressSpace();
-    if (AS == 100) {
+    if (AS == 100)
       return NullPointToID;
-    } else {
-      return ExternalPointToID;
-    }
+    return ExternalPointToID;
   }
 
   // Undef value
@@ -595,11 +681,12 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
   // Types for table entries
   Type *I8Ty = Type::getInt8Ty(Ctx);
   Type *I32Ty = Type::getInt32Ty(Ctx);
+  Type *I64Ty = Type::getInt64Ty(Ctx);
   Type *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
 
   // === Generate GOT Table ===
-  // Format: { addr (ptr-sized), PointToID (i32) }
-  // DataID is always 0xFFFFFF, not stored
+  // New format: { addr(64), id(64), sym_index(64) } = 24 bytes
+  // sym_index is a relocation to the symbol for linker resolution
   // Sort by PointToID to ensure consistent ordering
   
   SmallVector<const GOTEntry *, 64> SortedGOTEntries;
@@ -611,14 +698,17 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
   });
   
   SmallVector<Constant *, 64> GOTTableEntries;
-  StructType *GOTEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I32Ty});
+  // { addr(64), id(64), sym(64) }
+  StructType *GOTEntryTy = StructType::get(Ctx, {PtrSizedIntTy, I64Ty, I64Ty});
 
   for (const GOTEntry *Entry : SortedGOTEntries) {
     Constant *GVPtr = ConstantExpr::getPtrToInt(Entry->GV, PtrSizedIntTy);
-    Constant *PointToIDConst = ConstantInt::get(I32Ty, Entry->PointToID);
+    Constant *PointToIDConst = ConstantInt::get(I64Ty, Entry->PointToID);
+    // sym is a pointer to the GlobalVariable, will generate relocation
+    Constant *SymPtr = ConstantExpr::getPtrToInt(Entry->GV, I64Ty);
 
     Constant *GOTEntryConst = ConstantStruct::get(GOTEntryTy, 
-                                                   {GVPtr, PointToIDConst});
+                                                   {GVPtr, PointToIDConst, SymPtr});
     GOTTableEntries.push_back(GOTEntryConst);
   }
 
@@ -681,6 +771,31 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
   SmallVector<Constant *, 256> SparseDiffIDs;      // DataID + PointToID[] combined
   SmallVector<Constant *, 256> SparseDiffOffsets;  // offset[](64) array
 
+  // Track current byte offset in each section for external fixup
+  uint64_t SingleHeaderOffset = 0;
+  uint64_t ContiguousSameHeaderOffset = 0;
+  uint64_t ContiguousDiffIDOffset = 0;
+  uint64_t SparseSameHeaderOffset = 0;
+  uint64_t SparseDiffIDOffset = 0;
+  
+  // Size of each header type (in bytes)
+  const uint64_t SingleHeaderSize = PtrSize + 4 + 4;  // addr(64) + DataID(32) + PointToID(32)
+  const uint64_t ContiguousSameHeaderSize = PtrSize + PtrSize + 4 + 4;  // addr + count + DataID + PointToID
+  const uint64_t SparseSameHeaderSize = PtrSize + PtrSize + 4 + 4;  // addr + count + DataID + PointToID
+  
+  // Offset of PointToID field within each header type (for external fixup tracking)
+  // Single: { addr(64), DataID(32), PointToID(32) } -> PointToID at offset addr + DataID
+  const uint64_t SinglePointToIDOffset = PtrSize + 4;
+  // ContiguousSame: { addr(64), count(64), DataID(32), PointToID(32) } -> PointToID at addr + count + DataID
+  const uint64_t ContiguousSamePointToIDOffset = PtrSize + PtrSize + 4;
+  // SparseSame: { addr(64), count(64), DataID(32), PointToID(32) } -> same as ContiguousSame
+  const uint64_t SparseSamePointToIDOffset = PtrSize + PtrSize + 4;
+  
+  // For ID arrays (ContiguousDiff, SparseDiff): DataID is first, then PointToID[]
+  // PointToID[i] is at offset: DataID(4) + i * sizeof(uint32_t)
+  const uint64_t IDArrayDataIDSize = 4;   // DataID is 32-bit
+  const uint64_t IDArrayElementSize = 4;  // Each PointToID is 32-bit
+
   for (const PointerGroup &Group : PointerGroups) {
     Constant *GVPtr = Group.ContainingGV;
     
@@ -692,10 +807,17 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
       Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
       Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
       
+      // Track external fixup location
+      if (isExtID(P.PointToID)) {
+        recordExtFixupLocation(P.PointToID, SigSectionType::HeaderSingle, 
+                               SingleHeaderOffset + SinglePointToIDOffset);
+      }
+      
       Constant *Header = ConstantStruct::get(SingleHeaderTy,
           {Addr, ConstantInt::get(I32Ty, Group.DataID),
            ConstantInt::get(I32Ty, P.PointToID)});
       SingleHeaders.push_back(Header);
+      SingleHeaderOffset += SingleHeaderSize;
       break;
     }
     
@@ -706,11 +828,18 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
       Constant *GEP = ConstantExpr::getInBoundsGetElementPtr(I8Ty, GVPtr, OffsetConst);
       Constant *Addr = ConstantExpr::getPtrToInt(GEP, PtrSizedIntTy);
       
+      // Track external fixup location
+      if (isExtID(Group.CommonPointToID)) {
+        recordExtFixupLocation(Group.CommonPointToID, SigSectionType::HeaderContigSame,
+                               ContiguousSameHeaderOffset + ContiguousSamePointToIDOffset);
+      }
+      
       Constant *Header = ConstantStruct::get(ContiguousSameHeaderTy,
           {Addr, ConstantInt::get(PtrSizedIntTy, Group.Ptrs.size()),
            ConstantInt::get(I32Ty, Group.DataID),
            ConstantInt::get(I32Ty, Group.CommonPointToID)});
       ContiguousSameHeaders.push_back(Header);
+      ContiguousSameHeaderOffset += ContiguousSameHeaderSize;
       break;
     }
     
@@ -727,9 +856,18 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
       
       // Data: Combined ID segment = DataID(32) + PointToID[count](32 each)
       ContiguousDiffIDs.push_back(ConstantInt::get(I32Ty, Group.DataID));
+      uint64_t PtrIdx = 0;
       for (const PointerInfo &PI : Group.Ptrs) {
+        // Track external fixup: PointToID[i] at offset DataID + index * ElementSize
+        if (isExtID(PI.PointToID)) {
+          recordExtFixupLocation(PI.PointToID, SigSectionType::IDContigDiff,
+                                 ContiguousDiffIDOffset + IDArrayDataIDSize + PtrIdx * IDArrayElementSize);
+        }
         ContiguousDiffIDs.push_back(ConstantInt::get(I32Ty, PI.PointToID));
+        ++PtrIdx;
       }
+      // Update offset: DataID + PointToID[count]
+      ContiguousDiffIDOffset += IDArrayDataIDSize + Group.Ptrs.size() * IDArrayElementSize;
       break;
     }
     
@@ -737,11 +875,18 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
       // Header: { addr(64), count(64), DataID(32), PointToID(32) }
       Constant *Addr = ConstantExpr::getPtrToInt(GVPtr, PtrSizedIntTy);
       
+      // Track external fixup location
+      if (isExtID(Group.CommonPointToID)) {
+        recordExtFixupLocation(Group.CommonPointToID, SigSectionType::HeaderSparseSame,
+                               SparseSameHeaderOffset + SparseSamePointToIDOffset);
+      }
+      
       Constant *Header = ConstantStruct::get(SparseSameHeaderTy,
           {Addr, ConstantInt::get(PtrSizedIntTy, Group.Offsets.size()),
            ConstantInt::get(I32Ty, Group.DataID),
            ConstantInt::get(I32Ty, Group.CommonPointToID)});
       SparseSameHeaders.push_back(Header);
+      SparseSameHeaderOffset += SparseSameHeaderSize;
       
       // Data: offset[count](64 each) - separate offset array for SparseSame
       for (uint64_t Off : Group.Offsets) {
@@ -760,9 +905,18 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
       
       // Data: Combined ID segment = DataID(32) + PointToID[count](32 each)
       SparseDiffIDs.push_back(ConstantInt::get(I32Ty, Group.DataID));
+      uint64_t PtrIdx = 0;
       for (const PointerInfo &PI : Group.Ptrs) {
+        // Track external fixup: PointToID[i] at offset DataID + index * ElementSize
+        if (isExtID(PI.PointToID)) {
+          recordExtFixupLocation(PI.PointToID, SigSectionType::IDSparseDiff,
+                                 SparseDiffIDOffset + IDArrayDataIDSize + PtrIdx * IDArrayElementSize);
+        }
         SparseDiffIDs.push_back(ConstantInt::get(I32Ty, PI.PointToID));
+        ++PtrIdx;
       }
+      // Update offset: DataID + PointToID[count]
+      SparseDiffIDOffset += IDArrayDataIDSize + Group.Ptrs.size() * IDArrayElementSize;
       
       // Data: offset[count](64 each) - separate offset array for SparseDiff
       for (const PointerInfo &PI : Group.Ptrs) {
@@ -919,6 +1073,109 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
                     << "  SparseDiff IDs: " << SparseDiffIDs.size() << "\n"
                     << "  SparseSame Offsets: " << SparseSameOffsets.size() << "\n"
                     << "  SparseDiff Offsets: " << SparseDiffOffsets.size() << "\n");
+
+  // Generate external fixup sections if there are any external references
+  generateExtFixupSections(M, DL);
+}
+
+// Generate external fixup sections for external symbol references
+// These sections allow the linker to fix up external PointToID values during static linking
+void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataLayout &DL) {
+  LLVMContext &Ctx = M.getContext();
+  unsigned PtrSize = DL.getPointerSize();
+  IntegerType *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
+  IntegerType *I8Ty = Type::getInt8Ty(Ctx);
+  IntegerType *I32Ty = Type::getInt32Ty(Ctx);
+
+  DEBUG_FILE << ExtFixupMap.size() << " external fixup entries to process\n";
+  if (ExtFixupMap.empty() && ExtGOTMap.empty()) {
+    LLVM_DEBUG(dbgs() << "No external references, skipping ext fixup sections\n");
+    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I32Ty, 0), "");
+    CountGV->setSection(SectionCounter);
+    return;
+  }
+
+  // ========== Generate External Fixup Sections ==========
+  // Header format: { ext_id(64), sym_index(64), data_offset(64) }
+  // Data format: { section_type(8), offset(64) }[] for each location
+  if (!ExtFixupMap.empty()) {
+    StructType *FixupHeaderTy = StructType::get(Ctx, {
+        PtrSizedIntTy,  // ext_id
+        PtrSizedIntTy,  // sym_index
+        PtrSizedIntTy,  // data_offset
+        PtrSizedIntTy   // length (number of locations)
+    });
+    
+    SmallVector<Constant *, 32> FixupHeaders;
+    SmallVector<Constant *, 128> FixupDataEntries;
+    
+    uint64_t DataOffset = 0;
+    const uint64_t DataEntrySize = PtrSize;  // offset(8)
+
+    llvm::DenseMap<uint32_t, const GOTEntry *> ExtGOTMapLocal;
+    for (auto &KV : ExtGOTMap) {
+      ExtGOTMapLocal[KV.second.PointToID] = &KV.second;
+    }
+    
+    for (auto &KV : ExtFixupMap) {
+      uint32_t ExtID = KV.first;
+      const ExtFixupInfo &Info = KV.second;
+      GlobalVariable *GV = ExtGOTMapLocal[ExtID]->GV;
+      
+      // Create header entry
+      Constant *Header = ConstantStruct::get(FixupHeaderTy, {
+          ConstantInt::get(PtrSizedIntTy, ExtID),
+          ConstantExpr::getPtrToInt(GV, PtrSizedIntTy),
+          ConstantInt::get(PtrSizedIntTy, DataOffset),
+          ConstantInt::get(PtrSizedIntTy, Info.Locations.size())
+      });
+      FixupHeaders.push_back(Header);
+      
+      // Create data entries for all locations
+      for (const ExtFixupLocation &Loc : Info.Locations) {
+        uint64_t data = (Loc.Offset & ((1L << 56) -1)) | (static_cast<uint64_t>(Loc.SectionType) << 56);
+        Constant *DataEntry = ConstantInt::get(PtrSizedIntTy, data);
+        FixupDataEntries.push_back(DataEntry);
+        DataOffset += DataEntrySize;
+      }
+    }
+    
+    // Generate fixup header section
+    if (!FixupHeaders.empty()) {
+      ArrayType *HeaderArrayTy = ArrayType::get(FixupHeaderTy, FixupHeaders.size());
+      Constant *HeaderInit = ConstantArray::get(HeaderArrayTy, FixupHeaders);
+      GlobalVariable *HeaderGV = new GlobalVariable(
+          M, HeaderArrayTy, true, GlobalValue::PrivateLinkage, HeaderInit, "");
+      HeaderGV->setSection(SectionExtFixupHeader);
+      HeaderGV->setAlignment(Align(PtrSize));
+      
+      // Count for fixup headers
+      GlobalVariable *FixupCountGV = new GlobalVariable(M, I32Ty, true, 
+          GlobalValue::PrivateLinkage,
+          ConstantInt::get(I32Ty, FixupHeaders.size()), "");
+      FixupCountGV->setSection(SectionCounter);
+    } else {
+      GlobalVariable *FixupCountGV = new GlobalVariable(M, I32Ty, true, 
+          GlobalValue::PrivateLinkage,
+          ConstantInt::get(I32Ty, 0), "");
+      FixupCountGV->setSection(SectionCounter);
+    }
+    
+    // Generate fixup data section
+    if (!FixupDataEntries.empty()) {
+      ArrayType *DataArrayTy = ArrayType::get(PtrSizedIntTy, FixupDataEntries.size());
+      Constant *DataInit = ConstantArray::get(DataArrayTy, FixupDataEntries);
+      GlobalVariable *DataGV = new GlobalVariable(
+          M, DataArrayTy, true, GlobalValue::PrivateLinkage, DataInit, "");
+      DataGV->setSection(SectionExtFixupData);
+      DataGV->setAlignment(Align(PtrSize));
+    }
+    
+    LLVM_DEBUG(dbgs() << "Generated external fixup tables:\n"
+                      << "  Fixup Headers: " << FixupHeaders.size() << "\n"
+                      << "  Fixup Data Entries: " << FixupDataEntries.size() << "\n");
+  }
 }
 
 bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
@@ -946,6 +1203,11 @@ bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
 
   // Clear any previous data
   GOTMap.clear();
+  ExtGOTMap.clear();
+  ExtFixupMap.clear();
+  ExtGOTReverseMap.clear();
+  NextExtID = ExtGOTStartID;  // Reset external ID counter
+  MaxLocalID = 0;             // Reset max local ID
   PointerGroups.clear();
 
   // Step 1: Build GOT map for all global variables
