@@ -596,4 +596,11 @@ def : SysReg<"pcid", 0x5F2>;
 // ID Control and Status Register
 //===--------------------------
 def : SysReg<"idcsr", 0x5F3>;
+
+//===--------------------------
+// SigRISCV Control Registers
+//===--------------------------
+def : SysReg<"encmap", 0x5F4>;
+def : SysReg<"exitraw", 0x5F5>;
+def : SysReg<"hashsig", 0x5F6>;
 }
