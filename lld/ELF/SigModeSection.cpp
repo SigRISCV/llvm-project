@@ -1004,7 +1004,7 @@ void ExternalGotResolver<ELFT>::resolve() {
   buildGlobalMapping();
   collectExternalRefs();
   updateIdValues();
-  // markSectionsForRemoval();
+  markSectionsForRemoval();
   
   LLVM_DEBUG(dbgs() << "SigMode: Completed external GOT reference resolution\n");
 }
