@@ -507,7 +507,7 @@ void SigGotConverter<ELFT>::matchGotEntries() {
 
 template <class ELFT>
 void SigGotConverter<ELFT>::writeBackToSections() {
-  constexpr size_t outputEntrySize = 16;  // { gotIndex(64), id(64) }
+  __attribute__((unused)) constexpr size_t outputEntrySize = 16;  // { gotIndex(64), id(64) }
   constexpr size_t inputEntrySize = 24;   // { addr(64), id(64), sym_name_offset(64) }
   
   // Find the .sig_got OutputSection and get its InputSections in the correct order
