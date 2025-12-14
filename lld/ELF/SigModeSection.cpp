@@ -13,6 +13,8 @@
 #include "OutputSections.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
+#include "SyntheticSections.h"
+#include "Target.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
@@ -440,30 +442,62 @@ void SigGotConverter<ELFT>::matchGotEntries() {
   if (addrEntries.empty())
     return;
 
-  for (Symbol *sym : ctx.symtab->getSymbols()) {
-    if (!sym->isInGot(ctx))
-      continue;
+  // Get the GOT section from ctx.in.got
+  GotSection *gotSec = ctx.in.got.get();
+  if (!gotSec) {
+    LLVM_DEBUG(dbgs() << "SigMode: No GOT section found\n");
+    return;
+  }
 
-    if (!sym->isDefined())
-      continue;
+  uint64_t gotBaseAddr = gotSec->getVA();
+  size_t gotEntrySize = ctx.target->gotEntrySize;
+  
+  LLVM_DEBUG(dbgs() << "SigMode: GOT base address: 0x" 
+                    << Twine::utohexstr(gotBaseAddr) 
+                    << ", entry size: " << gotEntrySize << "\n");
 
-    uint64_t symAddr = sym->getVA(ctx);
+  // Iterate through GOT's relocations to get addresses stored in each GOT entry.
+  // Note: Relocations may not be in GOT index order, but each relocation has
+  // an 'offset' field that indicates its position in the GOT section.
+  // We calculate gotIndex from offset, then sort the results at the end.
+  for (const Relocation &rel : gotSec->relocations) {
+    // Calculate GOT index from the relocation offset
+    // Each GOT entry is gotEntrySize bytes (e.g., 8 bytes for 64-bit)
+    uint32_t gotIndex = rel.offset / gotEntrySize;
     
+    // Get the address that this GOT entry will hold
+    // The address comes from the symbol (if present) plus addend
+    uint64_t targetAddr = 0;
+    
+    if (rel.sym && rel.sym->isDefined()) {
+      // For defined symbols (including static variables), get their virtual address.
+      // Static variables have isDefined() == true because they have actual addresses.
+      // External/dynamic symbols (isPreemptible) are not in GOT->relocations,
+      // they are in relaDyn instead, so they won't appear here.
+      targetAddr = rel.sym->getVA(ctx) + rel.addend;
+    } else {
+      // Skip undefined symbols (shouldn't happen in GOT->relocations)
+      continue;
+    }
+    
+    // Search for this address in our sig_got entries
     SigGotAddrEntry searchKey;
-    searchKey.addr = symAddr;
+    searchKey.addr = targetAddr;
     auto it = std::lower_bound(addrEntries.begin(), addrEntries.end(), searchKey);
     
-    if (it != addrEntries.end() && it->addr == symAddr) {
+    if (it != addrEntries.end() && it->addr == targetAddr) {
       SigGotConvertedEntry converted;
-      converted.gotIndex = sym->getGotIdx(ctx);
+      converted.gotIndex = gotIndex;
       converted.id = it->id;
       convertedEntries.push_back(converted);
-      
-      LLVM_DEBUG(dbgs() << "SigMode: Matched GOT[" << converted.gotIndex 
-                        << "] -> ID " << converted.id << "\n");
+      LLVM_DEBUG(dbgs() << "SigMode: Matched GOT[" << gotIndex 
+                        << "] addr=0x" << Twine::utohexstr(targetAddr)
+                        << " -> ID " << converted.id << "\n");
     }
   }
 
+  // Sort by GOT index to ensure correct output order.
+  // This is necessary because GOT->relocations may not be in index order.
   llvm::sort(convertedEntries);
   totalGotIDCount = convertedEntries.size();
 
