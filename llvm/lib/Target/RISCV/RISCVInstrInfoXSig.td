@@ -4,7 +4,10 @@ def xsig_setrawid : RVSDNode<"XSIG_SETRAWID",
 
 def xsig_setnewid : RVSDNode<"XSIG_SETNEWID",
     SDTypeProfile<1, 1, [SDTCisVT<0, i64>, SDTCisVT<1, i64>]>, []>;
-  
+
+def xsig_sigdebug : RVSDNode<"XSIG_SIGDEBUG",
+    SDTypeProfile<0, 0, []>, [SDNPHasChain]>;
+
 def riscv_rcall     : RVSDNode<"RCALL", SDT_RISCVCall,
                                [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                 SDNPVariadic]>;
@@ -86,4 +89,5 @@ def : LdPat<sigload, LS, i64>;
 def : StPat<sigstore, SS, GPR, i64>;
 def : LdPat<dynsigload, LS_MAP, i64>;
 def : StPat<dynsigstore, SS_ID, GPR, i64>;
+def : Pat<(xsig_sigdebug), (DEBUG (XLenVT X0), 0)>;
 }

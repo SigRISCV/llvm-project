@@ -31,4 +31,7 @@ def int_riscv_xsig_dynsigload : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWil
 def int_riscv_xsig_dynsigstore : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty], [IntrWriteMem, IntrArgMemOnly]>,
   ClangBuiltin<"__builtin_riscv_xsig_dynsigstore">;
 
+def int_riscv_xsig_sigdebug : Intrinsic<[], [], [IntrNoMem, IntrHasSideEffects]>,
+  ClangBuiltin<"__builtin_riscv_xsig_sigdebug">;
+
 } // TargetPrefix = "riscv"
