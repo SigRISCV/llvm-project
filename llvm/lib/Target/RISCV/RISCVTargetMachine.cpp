@@ -269,7 +269,7 @@ RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
 // change to this, they can override it here.
 bool RISCVTargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
                                              unsigned DstAS) const {
-  if (SrcAS == 0 && DstAS == 100 || SrcAS == 100 && DstAS == 0) {
+  if ((SrcAS == 0 && DstAS == 100) || (SrcAS == 100 && DstAS == 0)) {
     return false;
   }
   

@@ -54,6 +54,9 @@ constexpr const char *sigSectionIDContigDiff = ".sig_id_contig_diff";
 constexpr const char *sigSectionIDSparseDiff = ".sig_id_sparse_diff";
 constexpr const char *sigSectionOffsetSparseSame = ".sig_offset_sparse_same";
 constexpr const char *sigSectionOffsetSparseDiff = ".sig_offset_sparse_diff";
+constexpr const char *sigSectionSymtab = ".sig_symtab";
+constexpr const char *sigSectionExtGOT = ".sig_ext_got";
+constexpr const char *sigSectionExtFixupData = ".sig_ext_fixup_data";
 
 // Special ID values that should not be relocated
 constexpr uint32_t sigExternalID = 0xFFFFFF;
@@ -78,6 +81,17 @@ void processSigModeSections(Ctx &ctx);
 // Only entries that match symbols in GOT are kept; unmatched entries are zeroed.
 template <class ELFT>
 void convertSigGotInPlace(Ctx &ctx);
+
+// Resolve external GOT references across object files
+// This should be called after all sections are allocated
+//
+// This function:
+// 1. Builds a global symbol name -> ID mapping from all .sig_got sections
+// 2. Resolves external references in .sig_ext_got using this mapping
+// 3. Updates ID values at locations specified in .sig_ext_fixup_data
+// 4. Removes temporary sections (.sig_ext_got, .sig_symtab, .sig_ext_fixup_data)
+template <class ELFT>
+void resolveExternalGotReferences(Ctx &ctx);
 
 } // namespace elf
 } // namespace lld

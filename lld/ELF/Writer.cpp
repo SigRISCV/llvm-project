@@ -1911,6 +1911,9 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   if (ctx.arg.emachine == EM_RISCV) {
     llvm::TimeTraceScope timeScope("Process SigMode sections");
     processSigModeSections<ELFT>(ctx);
+    // Resolve external GOT references: look up external symbol names in global
+    // mapping and update IDs at fixup locations
+    resolveExternalGotReferences<ELFT>(ctx);
   }
 
   if (!ctx.arg.relocatable) {
