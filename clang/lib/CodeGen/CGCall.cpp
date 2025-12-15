@@ -5540,7 +5540,10 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
         // variadic function do not have raw attribute
         // so we use this logic to do addrspace cast for variadic pointer args
         if (getContext().getTargetInfo().isSigModeSupported()) {
-          if (V->getType()->isPointerTy() && I->Ty->isPointerType()) {
+          // only variadic function need this addrspace cast
+          // because its args do not have raw/not raw attribute
+          // so we need to judge pointer attribute based on function attribute
+          if (CallInfo.isVariadic() && V->getType()->isPointerTy() && I->Ty->isPointerType()) {
             QualType PointeeType =  I->Ty.getTypePtr()->getAs<PointerType>()->getPointeeType();
             LangAS CurrentLangAS = PointeeType.getAddressSpaceUnderSigMode();
             unsigned CurrentAS = getContext().getTargetAddressSpace(CurrentLangAS);
@@ -5557,7 +5560,6 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
             
             // build addrspace cast if needed
             if (TargetAS != CurrentAS) {
-              assert(CallInfo.isVariadic());
               llvm::Type *TargetPtrTy = llvm::PointerType::get(
                   CGM.getLLVMContext(), TargetAS);
               V = Builder.CreateAddrSpaceCast(V, TargetPtrTy, 
