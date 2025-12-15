@@ -29,4 +29,8 @@ def sigstore : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
 def dynsigload : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
 def dynsigstore : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
 def sigdebug : RISCVXSigBuiltin<"void()", "experimental-xsig">;
+def char_debug : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
+def int_debug : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
+def ptr_debug : RISCVXSigBuiltin<"void(void*)", "experimental-xsig">;
+def csr_debug : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
 } // Attributes = [NoThrow, Const]
