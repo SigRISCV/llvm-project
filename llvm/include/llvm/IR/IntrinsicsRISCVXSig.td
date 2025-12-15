@@ -19,31 +19,31 @@ def int_riscv_xsig_setrawid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem
 def int_riscv_xsig_setnewid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem, IntrWillReturn]>,
   ClangBuiltin<"__builtin_riscv_xsig_setnewid">;
 
-def int_riscv_xsig_sigload : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWillReturn, IntrReadMem, IntrArgMemOnly]>,
-  ClangBuiltin<"__builtin_riscv_xsig_sigload">;
+def int_riscv_xsig_load_sig : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWillReturn, IntrReadMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_load_sig">;
 
-def int_riscv_xsig_sigstore : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty], [IntrWriteMem, IntrArgMemOnly]>,
-  ClangBuiltin<"__builtin_riscv_xsig_sigstore">;
+def int_riscv_xsig_store_sig : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty], [IntrWriteMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_store_sig">;
 
-def int_riscv_xsig_dynsigload : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWillReturn, IntrReadMem, IntrArgMemOnly]>,
-  ClangBuiltin<"__builtin_riscv_xsig_dynsigload">;
+def int_riscv_xsig_load_dyn : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWillReturn, IntrReadMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_load_dyn">;
 
-def int_riscv_xsig_dynsigstore : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty], [IntrWriteMem, IntrArgMemOnly]>,
-  ClangBuiltin<"__builtin_riscv_xsig_dynsigstore">;
+def int_riscv_xsig_store_dyn : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty], [IntrWriteMem, IntrArgMemOnly]>,
+  ClangBuiltin<"__builtin_riscv_xsig_store_dyn">;
 
-def int_riscv_xsig_sigdebug : Intrinsic<[], [], [IntrNoMem, IntrHasSideEffects]>,
-  ClangBuiltin<"__builtin_riscv_xsig_sigdebug">;
+def int_riscv_xsig_debug_sig : Intrinsic<[], [], [IntrNoMem, IntrHasSideEffects]>,
+  ClangBuiltin<"__builtin_riscv_xsig_debug_sig">;
 
-def int_riscv_xsig_char_debug : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
-  ClangBuiltin<"__builtin_riscv_xsig_char_debug">;
+def int_riscv_xsig_debug_chr : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
+  ClangBuiltin<"__builtin_riscv_xsig_debug_chr">;
 
-def int_riscv_xsig_int_debug : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
-  ClangBuiltin<"__builtin_riscv_xsig_int_debug">;
+def int_riscv_xsig_debug_int : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
+  ClangBuiltin<"__builtin_riscv_xsig_debug_int">;
 
-def int_riscv_xsig_ptr_debug : Intrinsic<[], [llvm_ptr_ty], [IntrNoMem, IntrHasSideEffects]>,
-  ClangBuiltin<"__builtin_riscv_xsig_ptr_debug">;
+def int_riscv_xsig_debug_ptr : Intrinsic<[], [llvm_ptr_ty], [IntrNoMem, IntrHasSideEffects]>,
+  ClangBuiltin<"__builtin_riscv_xsig_debug_ptr">;
 
-def int_riscv_xsig_csr_debug : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
-  ClangBuiltin<"__builtin_riscv_xsig_csr_debug">;
+def int_riscv_xsig_debug_csr : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
+  ClangBuiltin<"__builtin_riscv_xsig_debug_csr">;
 
 } // TargetPrefix = "riscv"

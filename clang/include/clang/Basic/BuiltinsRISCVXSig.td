@@ -24,13 +24,13 @@ let Attributes = [NoThrow, Const] in {
 
 def setrawid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
 def setnewid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
-def sigload : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
-def sigstore : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
-def dynsigload : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
-def dynsigstore : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
-def sigdebug : RISCVXSigBuiltin<"void()", "experimental-xsig">;
-def char_debug : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
-def int_debug : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
-def ptr_debug : RISCVXSigBuiltin<"void(void*)", "experimental-xsig">;
-def csr_debug : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
+def load_sig : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
+def store_sig : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
+def load_dyn : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
+def store_dyn : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
+def debug_sig : RISCVXSigBuiltin<"void()", "experimental-xsig">;
+def debug_chr : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
+def debug_int : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
+def debug_ptr : RISCVXSigBuiltin<"void(void*)", "experimental-xsig">;
+def debug_csr : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
 } // Attributes = [NoThrow, Const]

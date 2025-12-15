@@ -11082,14 +11082,6 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
 
     return DAG.getNode(RISCVISD::XSIG_SETNEWID, DL, Op.getValueType(), Ptr);
   }
-  case Intrinsic::riscv_xsig_sigload: {
-    return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
-      MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MOEncrypted);
-  }
-  case Intrinsic::riscv_xsig_dynsigload: {
-    return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
-      MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MODynEncrypted);
-  }
   case Intrinsic::riscv_tuple_insert: {
     SDValue Vec = Op.getOperand(1);
     SDValue SubVec = Op.getOperand(2);
@@ -11457,11 +11449,11 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op,
   switch (IntNo) {
   default:
     break;
-  case Intrinsic::riscv_xsig_sigload: {
+  case Intrinsic::riscv_xsig_load_sig: {
     return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
       MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MOEncrypted);
   }
-  case Intrinsic::riscv_xsig_dynsigload: {
+  case Intrinsic::riscv_xsig_load_dyn: {
     return DAG.getLoad(MVT::i64, SDLoc(Op), Op->getOperand(0), Op.getOperand(2),
       MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MODynEncrypted);
   }
@@ -11610,28 +11602,28 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_VOID(SDValue Op,
   switch (IntNo) {
   default:
     break;
-  case Intrinsic::riscv_xsig_sigstore: {
+  case Intrinsic::riscv_xsig_store_sig: {
     return DAG.getStore(Op.getOperand(0), SDLoc(Op), Op.getOperand(3), Op.getOperand(2),
         MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MOEncrypted);
   }
-  case Intrinsic::riscv_xsig_dynsigstore: {
+  case Intrinsic::riscv_xsig_store_dyn: {
     return DAG.getStore(Op.getOperand(0), SDLoc(Op), Op.getOperand(3), Op.getOperand(2),
         MachinePointerInfo(), MaybeAlign(), MachineMemOperand::MODynEncrypted);
   }
-  case Intrinsic::riscv_xsig_sigdebug: {
-    return DAG.getNode(RISCVISD::XSIG_SIGDEBUG, SDLoc(Op), MVT::Other, Op.getOperand(0));
+  case Intrinsic::riscv_xsig_debug_sig: {
+    return DAG.getNode(RISCVISD::XSIG_DEBUG_SIG, SDLoc(Op), MVT::Other, Op.getOperand(0));
   }
-  case Intrinsic::riscv_xsig_char_debug: {
-    return DAG.getNode(RISCVISD::XSIG_CHAR_DEBUG, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
+  case Intrinsic::riscv_xsig_debug_chr: {
+    return DAG.getNode(RISCVISD::XSIG_DEBUG_CHR, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
   }
-  case Intrinsic::riscv_xsig_int_debug: {
-    return DAG.getNode(RISCVISD::XSIG_INT_DEBUG, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
+  case Intrinsic::riscv_xsig_debug_int: {
+    return DAG.getNode(RISCVISD::XSIG_DEBUG_INT, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
   }
-  case Intrinsic::riscv_xsig_ptr_debug: {
-    return DAG.getNode(RISCVISD::XSIG_PTR_DEBUG, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
+  case Intrinsic::riscv_xsig_debug_ptr: {
+    return DAG.getNode(RISCVISD::XSIG_DEBUG_PTR, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
   }
-  case Intrinsic::riscv_xsig_csr_debug: {
-    return DAG.getNode(RISCVISD::XSIG_CSR_DEBUG, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
+  case Intrinsic::riscv_xsig_debug_csr: {
+    return DAG.getNode(RISCVISD::XSIG_DEBUG_CSR, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
   }
   case Intrinsic::riscv_seg2_store_mask:
   case Intrinsic::riscv_seg3_store_mask:

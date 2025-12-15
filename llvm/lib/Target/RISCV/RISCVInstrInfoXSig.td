@@ -5,19 +5,19 @@ def xsig_setrawid : RVSDNode<"XSIG_SETRAWID",
 def xsig_setnewid : RVSDNode<"XSIG_SETNEWID",
     SDTypeProfile<1, 1, [SDTCisVT<0, i64>, SDTCisVT<1, i64>]>, []>;
 
-def xsig_sigdebug : RVSDNode<"XSIG_SIGDEBUG",
+def xsig_debug_sig : RVSDNode<"XSIG_DEBUG_SIG",
     SDTypeProfile<0, 0, []>, [SDNPHasChain]>;
   
-def xsig_char_debug : RVSDNode<"XSIG_CHAR_DEBUG",
+def xsig_debug_chr : RVSDNode<"XSIG_DEBUG_CHR",
     SDTypeProfile<0, 1, [SDTCisVT<0, i64>]>, [SDNPHasChain]>;
 
-def xsig_int_debug : RVSDNode<"XSIG_INT_DEBUG",
+def xsig_debug_int : RVSDNode<"XSIG_DEBUG_INT",
     SDTypeProfile<0, 1, [SDTCisVT<0, i64>]>, [SDNPHasChain]>;
 
-def xsig_ptr_debug : RVSDNode<"XSIG_PTR_DEBUG",
+def xsig_debug_ptr : RVSDNode<"XSIG_DEBUG_PTR",
     SDTypeProfile<0, 1, [SDTCisVT<0, i64>]>, [SDNPHasChain]>;
 
-def xsig_csr_debug : RVSDNode<"XSIG_CSR_DEBUG",
+def xsig_debug_csr : RVSDNode<"XSIG_DEBUG_CSR",
     SDTypeProfile<0, 1, [SDTCisVT<0, i64>]>, [SDNPHasChain]>;
 
 def riscv_rcall     : RVSDNode<"RCALL", SDT_RISCVCall,
@@ -70,10 +70,10 @@ def DEBUG : RVInstI<0b111, OPC_CUSTOM_2, (outs GPR:$rd),
                     "debug", "$rd, $rs1, $imm12">,
             Sched<[]>;
 def : InstAlias<"debug", (DEBUG X0, X0, 0)>;
-def : InstAlias<"debug_char $rs1", (DEBUG X0, GPR:$rs1, 1)>;
-def : InstAlias<"debug_int $rs1", (DEBUG X0, GPR:$rs1, 2)>;
-def : InstAlias<"debug_ptr $rs1", (DEBUG X0, GPR:$rs1, 3)>;
-def : InstAlias<"debug_csr $rs1", (DEBUG X0, GPR:$rs1, 4)>;
+def : InstAlias<"debug.chr $rs1", (DEBUG X0, GPR:$rs1, 1)>;
+def : InstAlias<"debug.int $rs1", (DEBUG X0, GPR:$rs1, 2)>;
+def : InstAlias<"debug.ptr $rs1", (DEBUG X0, GPR:$rs1, 3)>;
+def : InstAlias<"debug.csr $rs1", (DEBUG X0, GPR:$rs1, 4)>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0, isBarrier = 1 in
 def SWITCHS : RVInstR<0b0000000, 0b100, OPC_CUSTOM_2, (outs GPR:$rd),
@@ -105,9 +105,9 @@ def : LdPat<sigload, LS, i64>;
 def : StPat<sigstore, SS, GPR, i64>;
 def : LdPat<dynsigload, LS_MAP, i64>;
 def : StPat<dynsigstore, SS_ID, GPR, i64>;
-def : Pat<(xsig_sigdebug), (DEBUG (XLenVT X0), 0)>;
-def : Pat<(xsig_char_debug GPR:$rs1), (DEBUG GPR:$rs1, 1)>;
-def : Pat<(xsig_int_debug GPR:$rs1), (DEBUG GPR:$rs1, 2)>;
-def : Pat<(xsig_ptr_debug GPR:$rs1), (DEBUG GPR:$rs1, 3)>;
-def : Pat<(xsig_csr_debug GPR:$rs1), (DEBUG GPR:$rs1, 4)>;
+def : Pat<(xsig_debug_sig), (DEBUG (XLenVT X0), 0)>;
+def : Pat<(xsig_debug_chr GPR:$rs1), (DEBUG GPR:$rs1, 1)>;
+def : Pat<(xsig_debug_int GPR:$rs1), (DEBUG GPR:$rs1, 2)>;
+def : Pat<(xsig_debug_ptr GPR:$rs1), (DEBUG GPR:$rs1, 3)>;
+def : Pat<(xsig_debug_csr GPR:$rs1), (DEBUG GPR:$rs1, 4)>;
 }
