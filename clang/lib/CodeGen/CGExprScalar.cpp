@@ -2503,9 +2503,9 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       (SrcTy->getPointerAddressSpace() == raw_addrspace || DstTy->getPointerAddressSpace() == raw_addrspace)){
       QualType pointee = cast<PointerType>(DestTy)->getPointeeType();
       const Type* pointee_type = pointee.getTypePtr();
-      if (pointee_type->isContainPointer()) {
-        CGF.CGM.getDiags().Report(CE->getBeginLoc(), diag::err_cast_with_attr_without_pointer) << pointee.getAsString();
-      }
+      // if (pointee_type->isContainPointer()) {
+      //   CGF.CGM.getDiags().Report(CE->getBeginLoc(), diag::err_cast_with_attr_without_pointer) << pointee.getAsString();
+      // }
       return CGF.CGM.getTargetCodeGenInfo().performAddrSpaceCast(
           CGF, Src, E->getType().getAddressSpace(), DstTy);
     }
