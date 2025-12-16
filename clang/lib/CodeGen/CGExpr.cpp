@@ -5348,6 +5348,9 @@ LValue CodeGenFunction::EmitLValueForField(LValue base, const FieldDecl *field,
 
     QualType fieldType =
         field->getType().withCVRQualifiers(base.getVRQualifiers());
+    if (base.getQuals().hasRaw()) {
+      fieldType = getContext().getQualifiedType(fieldType,fieldType.getQualifiers().withRaw());
+    }
     // TODO: Support TBAA for bit fields.
     LValueBaseInfo FieldBaseInfo(BaseInfo.getAlignmentSource());
     return LValue::MakeBitfield(Addr, Info, fieldType, FieldBaseInfo,
@@ -5359,7 +5362,7 @@ LValue CodeGenFunction::EmitLValueForField(LValue base, const FieldDecl *field,
   // and unions.
   QualType FieldType = field->getType();
   if (base.getQuals().hasRaw()) {
-    FieldType = FieldType.getRawChainType(getContext());
+    FieldType = getContext().getQualifiedType(FieldType,FieldType.getQualifiers().withRaw());
   }
   const RecordDecl *rec = field->getParent();
   AlignmentSource BaseAlignSource = BaseInfo.getAlignmentSource();
