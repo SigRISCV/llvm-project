@@ -24,6 +24,7 @@
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/MachineCombinerPattern.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineTraceMetrics.h"
@@ -650,7 +651,7 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
       Opcode = RISCV::SW;
     } else if (!STI.isSigModeSupport()) {
       Opcode = RISCV::SD;
-    } else if (Flags & MachineInstr::FrameSetup) {
+    } else if (Flags & MachineInstr::FrameSetup_EncMap) {
       Opcode = RISCV::SS_ID;
     } else {
       Opcode = RISCV::SS;
@@ -700,6 +701,9 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   else
     llvm_unreachable("Can't store this register to stack slot");
 
+  if (Flags == MachineInstr::FrameSetup_EncMap)
+    Flags = MachineInstr::FrameSetup;
+
   if (RISCVRegisterInfo::isRVVRegClass(RC)) {
     MachineMemOperand *MMO = MF->getMachineMemOperand(
         MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOStore,
@@ -735,7 +739,7 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   MachineFunction *MF = MBB.getParent();
   MachineFrameInfo &MFI = MF->getFrameInfo();
   DebugLoc DL =
-      Flags & MachineInstr::FrameDestroy ? MBB.findDebugLoc(I) : DebugLoc();
+      (Flags & MachineInstr::FrameDestroy || Flags & MachineInstr::FrameDestroy_EncMap)  ? MBB.findDebugLoc(I) : DebugLoc();
 
   unsigned Opcode;
   if (RISCV::GPRRegClass.hasSubClassEq(RC)) {
@@ -743,7 +747,7 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
       Opcode = RISCV::LW;
     } else if (!STI.isSigModeSupport()) {
       Opcode = RISCV::LD;
-    } else if (Flags & MachineInstr::FrameDestroy) {
+    } else if (Flags & MachineInstr::FrameDestroy_EncMap) {
       Opcode = RISCV::LS_MAP;
     } else {
       Opcode = RISCV::LS;
@@ -792,6 +796,9 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVRELOAD8_M1;
   else
     llvm_unreachable("Can't load this register from stack slot");
+
+  if (Flags == MachineInstr::FrameDestroy_EncMap)
+    Flags = MachineInstr::FrameDestroy;
 
   if (RISCVRegisterInfo::isRVVRegClass(RC)) {
     MachineMemOperand *MMO = MF->getMachineMemOperand(

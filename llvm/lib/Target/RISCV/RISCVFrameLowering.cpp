@@ -2192,11 +2192,13 @@ bool RISCVFrameLowering::spillCalleeSavedRegisters(
   auto storeRegsToStackSlots = [&](decltype(UnmanagedCSI) CSInfo) {
     for (auto &CS : CSInfo) {
       // Insert the spill to the stack frame.
+      MachineInstr::MIFlag FrameSetupFlag =
+          RVFI->hasEncMapFrameIndex() ? MachineInstr::FrameSetup_EncMap : MachineInstr::FrameSetup;
       MCRegister Reg = CS.getReg();
       const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
       TII.storeRegToStackSlot(MBB, MI, Reg, !MBB.isLiveIn(Reg),
                               CS.getFrameIdx(), RC, Register(),
-                              MachineInstr::FrameSetup);
+                              FrameSetupFlag);
     }
   };
   storeRegsToStackSlots(UnmanagedCSI);
@@ -2208,7 +2210,7 @@ bool RISCVFrameLowering::spillCalleeSavedRegisters(
     // Store X0 (zero) to the zero slot using SD/SS instruction
     TII.storeRegToStackSlot(MBB, MI, RISCV::X0, true, EncMapFI,
                             &RISCV::GPRRegClass, Register(),
-                            MachineInstr::FrameSetup);
+                            MachineInstr::FrameSetup_EncMap);
   }
 
   return true;
@@ -2297,7 +2299,7 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
     // this generates the LS instruction we need
     TII.loadRegFromStackSlot(MBB, MI, RISCV::X0, ZeroFI,
                              &RISCV::GPRRegClass, Register(),
-                             MachineInstr::FrameDestroy);
+                             MachineInstr::FrameDestroy_EncMap);
   }
 
   const auto &UnmanagedCSI = getUnmanagedCSI(*MF, CSI);
@@ -2305,10 +2307,12 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
 
   auto loadRegFromStackSlot = [&](decltype(UnmanagedCSI) CSInfo) {
     for (auto &CS : CSInfo) {
+      MachineInstr::MIFlag FrameSetupFlag =
+          RVFI->hasEncMapFrameIndex() ? MachineInstr::FrameDestroy_EncMap : MachineInstr::FrameDestroy;
       MCRegister Reg = CS.getReg();
       const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
       TII.loadRegFromStackSlot(MBB, MI, Reg, CS.getFrameIdx(), RC, Register(),
-                               MachineInstr::FrameDestroy);
+                               FrameSetupFlag);
       assert(MI != MBB.begin() &&
              "loadRegFromStackSlot didn't insert any code!");
     }
