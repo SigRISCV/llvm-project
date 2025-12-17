@@ -40,6 +40,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/IR/Module.h"
@@ -80,11 +81,14 @@ private:
   SmallVector<AllocaInst *, 16> Allocas;
   
   // Process a single function
-  bool runOnFunction(Function &F, Function *SetNewIDFn, Type *PtrTy, Type *I64Ty);
+  bool runOnFunction(Function &F, Module &M);
   
   // Replace ptr null usage in a single function
   bool replaceNullPointers(Function &F, Function *SetNewIDFn, 
                            Type *PtrTy, Type *I64Ty);
+  
+  // SetNewId for Heap Allocator
+  bool processHeapAllocators(Function &F, Function *SetNewIDFn, Type *PtrTy);
   
   // Add setnewid to allocas in a single function
   bool processAllocas(Function &F, Function *SetNewIDFn, Type *PtrTy);
@@ -121,16 +125,6 @@ bool RISCVSigModeIDIsolation::runOnModule(Module &M) {
     LLVM_DEBUG(dbgs() << "SigMode not enabled, skipping ID isolation\n");
     return false;
   }
-
-  LLVMContext &Ctx = M.getContext();
-  
-  // Get the setnewid intrinsic
-  Function *SetNewIDFn = Intrinsic::getOrInsertDeclaration(
-      &M, Intrinsic::riscv_xsig_setdummyid);
-  
-  // Get types
-  Type *PtrTy = PointerType::get(Ctx, 0);  // ptr in address space 0
-  Type *I64Ty = Type::getInt64Ty(Ctx);
   
   bool Changed = false;
   
@@ -138,18 +132,31 @@ bool RISCVSigModeIDIsolation::runOnModule(Module &M) {
     if (F.isDeclaration())
       continue;
     
-    Changed |= runOnFunction(F, SetNewIDFn, PtrTy, I64Ty);
+    Changed |= runOnFunction(F, M);
   }
   
   return Changed;
 }
 
-bool RISCVSigModeIDIsolation::runOnFunction(Function &F, Function *SetNewIDFn,
-                                             Type *PtrTy, Type *I64Ty) {
+bool RISCVSigModeIDIsolation::runOnFunction(Function &F, Module &M) {
   bool Changed = false;
+
+  // Get the setnewid intrinsic
+  Function *SetNewIDFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::riscv_xsig_setdummyid);
+  LLVMContext &Ctx = M.getContext();
+  
+  // Get types
+  Type *PtrTy = PointerType::get(Ctx, 0);  // ptr in address space 0
+  Type *I64Ty = Type::getInt64Ty(Ctx);
   
   // 1. Replace null pointers
   Changed |= replaceNullPointers(F, SetNewIDFn, PtrTy, I64Ty);
+
+  SetNewIDFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::riscv_xsig_setnewid);
+  
+  Changed |= processHeapAllocators(F, SetNewIDFn, PtrTy);
   
   // // 2. Process allocas - collect them first
   // Allocas.clear();
@@ -158,6 +165,70 @@ bool RISCVSigModeIDIsolation::runOnFunction(Function &F, Function *SetNewIDFn,
   // if (!Allocas.empty()) {
   //   Changed |= processAllocas(F, SetNewIDFn, PtrTy);
   // }
+  
+  return Changed;
+}
+
+bool RISCVSigModeIDIsolation::processHeapAllocators(Function &F, Function *SetNewIDFn, Type *PtrTy) {
+
+  static const char* heap_allocator_list[] = {"malloc", "calloc", "realloc"};
+
+  bool Changed = false;
+  
+  for (BasicBlock &BB : F) {
+    for (Instruction &I : BB) {
+      // Look for calls to malloc/calloc/realloc
+      if (auto *Call = dyn_cast<CallInst>(&I)) {
+        Function *Callee = Call->getCalledFunction();
+        if (!Callee)
+          continue;
+        
+        StringRef CalleeName = Callee->getName();
+        bool is_heap_allocator = false;
+        for (const char* name : heap_allocator_list) {
+          if (CalleeName == name) {
+            is_heap_allocator = true;
+            break;
+          }
+        }
+        if (is_heap_allocator) {
+          LLVM_DEBUG(dbgs() << "Processing heap allocator call: " << *Call << "\n");
+          
+          IRBuilder<> Builder(Call->getNextNode());
+          Builder.SetCurrentDebugLocation(Call->getDebugLoc());
+          
+          Value *AllocPtr = Call;
+          int user_num = 0;
+          for(auto user : Call->users()) {
+            user_num++;
+          }
+          if (user_num != 1) {
+            LLVM_DEBUG(dbgs() << "  Skipping allocator with multiple users\n");
+            continue;
+          }
+          User* alloctor_user = *(Call->users().begin());
+          if (!isa<AddrSpaceCastInst>(alloctor_user)) {
+            LLVM_DEBUG(dbgs() << "  Skipping allocator without addrspacecast user\n");
+            continue;
+          }
+          AddrSpaceCastInst* ASC = cast<AddrSpaceCastInst>(alloctor_user);
+          if (ASC->getSrcAddressSpace() != 100 || ASC->getDestAddressSpace() != 0) {
+            LLVM_DEBUG(dbgs() << "  Skipping allocator without AS100 to AS0 cast\n");
+            continue;
+          }
+          Value* NewASC = Builder.CreateAddrSpaceCast(AllocPtr, PtrTy);
+          Value *NewPtr = Builder.CreateCall(SetNewIDFn, {NewASC});
+          ASC->replaceAllUsesWith(NewPtr);
+          ASC->eraseFromParent();
+          Changed = true;
+          NumAllocasProcessed++;
+          
+          LLVM_DEBUG(dbgs() << "Replaced allocator call result with setnewid: " 
+                            << *NewPtr << "\n");
+        }
+      }
+    }
+  }
   
   return Changed;
 }
