@@ -763,6 +763,13 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
         "");
     GOTSizeGV->setSection(SectionCounter);
   } else {
+    for (int i = 0; i < 7; i++) {
+      GlobalVariable *GOTSizeGV = new GlobalVariable(
+          M, I32Ty, /*isConstant=*/true, GlobalValue::PrivateLinkage,
+          ConstantInt::get(I32Ty, 0),
+          "");
+      GOTSizeGV->setSection(SectionCounter);
+    }
     return;
   }
 
