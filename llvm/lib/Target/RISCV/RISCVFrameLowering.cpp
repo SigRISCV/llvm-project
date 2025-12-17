@@ -955,7 +955,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   // FIXME: assumes exactly one instruction is used to restore each
   // callee-saved register.
   MBBI = std::prev(MBBI, getRVVCalleeSavedInfo(MF, CSI).size() +
-                             getUnmanagedCSI(MF, CSI).size());
+                             getUnmanagedCSI(MF, CSI).size() + RVFI->hasEncMapFrameIndex());
   CFIInstBuilder CFIBuilder(MBB, MBBI, MachineInstr::FrameSetup);
   bool NeedsDwarfCFI = needsDwarfCFI(MF);
 
@@ -1316,7 +1316,8 @@ void RISCVFrameLowering::emitEpilogue(MachineFunction &MF,
   // Skip to after the restores of scalar callee-saved registers
   // FIXME: assumes exactly one instruction is used to restore each
   // callee-saved register.
-  MBBI = std::next(FirstScalarCSRRestoreInsn, getUnmanagedCSI(MF, CSI).size());
+  MBBI = std::next(FirstScalarCSRRestoreInsn, getUnmanagedCSI(MF, CSI).size() + 
+                                          RVFI->hasEncMapFrameIndex());
   CFIBuilder.setInsertPoint(MBBI);
 
   if (getLibCallID(MF, CSI) != -1) {
@@ -1416,6 +1417,17 @@ RISCVFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
   if (CSI.size()) {
     MinCSFI = CSI[0].getFrameIdx();
     MaxCSFI = CSI[CSI.size() - 1].getFrameIdx();
+  }
+
+  // SigMode: EncMapFrameIndex should also use SP-relative addressing
+  if (RVFI->hasEncMapFrameIndex()) {
+    int EncMapFI = RVFI->getEncMapFrameIndex();
+    if (EncMapFI >= 0) {
+      if (MinCSFI > EncMapFI || CSI.empty())
+        MinCSFI = EncMapFI;
+      if (MaxCSFI < EncMapFI)
+        MaxCSFI = EncMapFI;
+    }
   }
 
   if (FI >= MinCSFI && FI <= MaxCSFI) {
@@ -2047,10 +2059,6 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
     GPRnum++;
   }
 
-  if (STI.isSigModeSupport() && GPRnum > 0) {
-    RVFI->allocEncMapFrameIndex(MF);
-  }
-
   for (auto &CS : CSI) {
     MCRegister Reg = CS.getReg();
     const TargetRegisterClass *RC = RegInfo->getMinimalPhysRegClass(Reg);
@@ -2107,6 +2115,20 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
     CS.setFrameIdx(FrameIdx);
     if (RISCVRegisterInfo::isRVVRegClass(RC))
       MFI.setStackID(FrameIdx, TargetStackID::ScalableVector);
+  }
+
+  // Allocate EncMapFrameIndex for SigMode after CSI loop to ensure it's in CSI range
+  if (STI.isSigModeSupport() && GPRnum > 0) {
+    const TargetRegisterClass &RC = RISCV::GPRRegClass;
+    unsigned Size = RegInfo->getSpillSize(RC);
+    Align Alignment = RegInfo->getSpillAlign(RC);
+    Alignment = std::min(Alignment, getStackAlign());
+    int FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
+    if ((unsigned)FrameIdx < MinCSFrameIndex)
+      MinCSFrameIndex = FrameIdx;
+    if ((unsigned)FrameIdx > MaxCSFrameIndex)
+      MaxCSFrameIndex = FrameIdx;
+    RVFI->setEncMapFrameIndex(FrameIdx);
   }
 
   if (RVFI->useQCIInterrupt(MF)) {

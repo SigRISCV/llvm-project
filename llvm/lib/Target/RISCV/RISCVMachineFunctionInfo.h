@@ -117,19 +117,9 @@ public:
     BranchRelaxationScratchFrameIndex = Index;
   }
 
-  // SigMode: Get or create frame index for zero slot
-  int allocEncMapFrameIndex(MachineFunction &MF) {
-    assert(EncMapFrameIndex == -1);
-    MachineFrameInfo &MFI = MF.getFrameInfo();
-    const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
-    const TargetRegisterClass& RC = RISCV::GPRRegClass;
-    unsigned Size = RegInfo->getSpillSize(RC);
-    Align Alignment = RegInfo->getSpillAlign(RC);
-    EncMapFrameIndex =
-          MFI.CreateStackObject(Size, Alignment, false);
-    return EncMapFrameIndex;
-  }
+  // SigMode: EncMapFrameIndex for zero slot (allocated in CSI range for SP-relative access)
   int getEncMapFrameIndex() const { return EncMapFrameIndex; }
+  void setEncMapFrameIndex(int Index) { EncMapFrameIndex = Index; }
   bool hasEncMapFrameIndex() const { return EncMapFrameIndex != -1; }
 
   unsigned getReservedSpillsSize() const {
