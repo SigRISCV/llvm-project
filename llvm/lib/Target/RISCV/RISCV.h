@@ -118,6 +118,9 @@ void initializeRISCVPromoteConstantPass(PassRegistry &);
 ModulePass *createRISCVCollectGlobalPointersPass();
 void initializeRISCVCollectGlobalPointersPass(PassRegistry &);
 
+ModulePass *createRISCVSigModeIDIsolationPass();
+void initializeRISCVSigModeIDIsolationPass(PassRegistry &);
+
 FunctionPass *createRISCVVLOptimizerPass();
 void initializeRISCVVLOptimizerPass(PassRegistry &);
 
