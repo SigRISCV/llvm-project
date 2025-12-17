@@ -7586,7 +7586,7 @@ SDValue RISCVTargetLowering::LowerAddrSpaceCast(SDValue Op,
   }
 
   if (SrcAS == 100 && DstAS == 0) {
-    return DAG.getNode(RISCVISD::XSIG_SETNEWID,
+    return DAG.getNode(RISCVISD::XSIG_SETDUMMYID,
         DL, Op.getValueType(), Src);
   }
   
@@ -11076,6 +11076,10 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::riscv_xsig_setrawid: {
     SDValue Ptr = Op.getOperand(1);
     return DAG.getNode(RISCVISD::XSIG_SETRAWID, DL, Op.getValueType(), Ptr);
+  }
+  case Intrinsic::riscv_xsig_setdummyid: {
+    SDValue Ptr = Op.getOperand(1);
+    return DAG.getNode(RISCVISD::XSIG_SETDUMMYID, DL, Op.getValueType(), Ptr);
   }
   case Intrinsic::riscv_xsig_setnewid: {
     SDValue Ptr = Op.getOperand(1);

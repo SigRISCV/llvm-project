@@ -24,6 +24,7 @@ let Attributes = [NoThrow, Const] in {
 
 def setrawid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
 def setnewid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
+def setdummyid : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
 def load_sig : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
 def store_sig : RISCVXSigBuiltin<"void(void*, void*)", "experimental-xsig">;
 def load_dyn : RISCVXSigBuiltin<"void*(void*)", "experimental-xsig">;
