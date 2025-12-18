@@ -60,7 +60,12 @@ def SETDUMMYID : RVInstI<0b010, OPC_CUSTOM_2, (outs GPR:$rd),
                      (ins GPR:$rs1, simm12_lo:$imm12),
                      "setdummyid", "$rd, $rs1, $imm12">,
              Sched<[WriteIALU, ReadIALU]>;
-def : InstAlias<"setrawid $rd, $rs1", (ADD GPR:$rd, X0, GPR:$rs1)>;
+
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
+def SETRAWID : RVInstI<0b110, OPC_CUSTOM_2, (outs GPR:$rd),
+                     (ins GPR:$rs1, simm12_lo:$imm12),
+                     "setrawid", "$rd, $rs1, $imm12">,
+             Sched<[WriteIALU, ReadIALU]>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
 def SETNEWID : RVInstI<0b011, OPC_CUSTOM_2, (outs GPR:$rd),
@@ -99,11 +104,12 @@ def PseudoLSGA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                        "lsga", "$dst, $src">;
 
 // Define Pat
-def : Pat<(xsig_setrawid GPR:$rs1), (ADD (XLenVT X0), GPR:$rs1)>;
 def : Pat<(xsig_setnewid GPR:$rs1), (SETNEWID GPR:$rs1, 0)>;
 def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (SETNEWID GPR:$rs1, simm12_lo:$imm12)>;
 def : Pat<(xsig_setdummyid GPR:$rs1), (SETDUMMYID GPR:$rs1, 0)>;
 def : Pat<(xsig_setdummyid (add GPR:$rs1, simm12_lo:$imm12)), (SETDUMMYID GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
+def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
 def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
 def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
 def : LdPat<sigload, LS, i64>;
