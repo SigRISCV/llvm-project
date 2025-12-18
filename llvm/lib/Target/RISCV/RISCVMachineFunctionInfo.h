@@ -58,6 +58,8 @@ private:
   int BranchRelaxationScratchFrameIndex = -1;
   /// FrameIndex for storing zero value (SigMode extension)
   int EncMapFrameIndex = -1;
+  /// FrameIndex for storing sp with old ID (SigMode extension)
+  int OldIDSpFrameIndex = -1;
   /// Size of any opaque stack adjustment due to save/restore libcalls.
   unsigned LibCallStackSize = 0;
   /// Size of RVV stack.
@@ -121,6 +123,10 @@ public:
   int getEncMapFrameIndex() const { return EncMapFrameIndex; }
   void setEncMapFrameIndex(int Index) { EncMapFrameIndex = Index; }
   bool hasEncMapFrameIndex() const { return EncMapFrameIndex != -1; }
+  // SigMode: OldIDSpFrameIndex for storing sp with old ID
+  int getOldIDSpFrameIndex() const { return OldIDSpFrameIndex; }
+  void setOldIDSpFrameIndex(int Index) { OldIDSpFrameIndex = Index; }
+  bool hasOldIDSpFrameIndex() const { return OldIDSpFrameIndex != -1; }
 
   unsigned getReservedSpillsSize() const {
     return LibCallStackSize + RVPushStackSize + QCIInterruptStackSize;

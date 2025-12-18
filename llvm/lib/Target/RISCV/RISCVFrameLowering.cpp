@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
@@ -1060,10 +1061,11 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   uint64_t ProbeSize = TLI->getStackProbeSize(MF, getStackAlign());
   bool DynAllocation =
       MF.getInfo<RISCVMachineFunctionInfo>()->hasDynamicAllocation();
-  if (StackSize != 0)
+  if (StackSize != 0) {
     allocateStack(MBB, MBBI, MF, StackSize, RealStackSize, NeedsDwarfCFI,
                   NeedProbe, ProbeSize, DynAllocation,
                   MachineInstr::FrameSetup);
+  }
 
   // Save SiFive CLIC CSRs into Stack
   emitSiFiveCLICPreemptibleSaves(MF, MBB, MBBI, DL);
@@ -1074,7 +1076,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   // to the stack, not before.
   // FIXME: assumes exactly one instruction is used to save each callee-saved
   // register.
-  std::advance(MBBI, getUnmanagedCSI(MF, CSI).size());
+  std::advance(MBBI, getUnmanagedCSI(MF, CSI).size() + RVFI->hasEncMapFrameIndex());
   CFIBuilder.setInsertPoint(MBBI);
 
   // Iterate over list of callee-saved registers and emit .cfi_offset
@@ -1083,6 +1085,22 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
     for (const CalleeSavedInfo &CS : getUnmanagedCSI(MF, CSI))
       CFIBuilder.buildOffset(CS.getReg(),
                              MFI.getObjectOffset(CS.getFrameIdx()));
+
+  if (RVFI->hasOldIDSpFrameIndex()) {
+    Register VR =
+          MF.getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+    const RISCVInstrInfo *TII = STI.getInstrInfo();
+    BuildMI(MBB, MBBI, DL, TII->get(RISCV::ADDI), VR)
+        .addReg(SPReg)
+        .addImm(0)
+        .setMIFlag(MachineInstr::FrameSetup);
+    BuildMI(MBB, MBBI, DL, TII->get(RISCV::SETNEWID), SPReg)
+        .addReg(SPReg)
+        .addImm(0)
+        .setMIFlag(MachineInstr::FrameSetup);
+    TII->storeRegToStackSlot(MBB, MBBI, VR, true, \
+        RVFI->getOldIDSpFrameIndex(), &RISCV::GPRRegClass, SPReg, MachineInstr::FrameSetup);
+  }
 
   // Generate new FP.
   if (hasFP(MF)) {
@@ -1310,6 +1328,12 @@ void RISCVFrameLowering::emitEpilogue(MachineFunction &MF,
                   getStackAlign());
   }
 
+  if (RVFI->hasOldIDSpFrameIndex()) {
+    const RISCVInstrInfo *TII = STI.getInstrInfo();
+    TII->loadRegFromStackSlot(MBB, MBBI, SPReg, RVFI->getOldIDSpFrameIndex(), \
+        &RISCV::GPRRegClass, SPReg, MachineInstr::FrameDestroy);
+  }
+
   if (NeedsDwarfCFI && hasFP(MF))
     CFIBuilder.buildDefCFA(SPReg, RealStackSize);
 
@@ -1427,6 +1451,16 @@ RISCVFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
         MinCSFI = EncMapFI;
       if (MaxCSFI < EncMapFI)
         MaxCSFI = EncMapFI;
+    }
+  }
+
+  if (RVFI->hasOldIDSpFrameIndex()) {
+    int OldIDSpFI = RVFI->getOldIDSpFrameIndex();
+    if (OldIDSpFI >= 0) {
+      if (MinCSFI > OldIDSpFI || CSI.empty())
+        MinCSFI = OldIDSpFI;
+      if (MaxCSFI < OldIDSpFI)
+        MaxCSFI = OldIDSpFI;
     }
   }
 
@@ -2118,17 +2152,25 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
   }
 
   // Allocate EncMapFrameIndex for SigMode after CSI loop to ensure it's in CSI range
-  if (STI.isSigModeSupport() && GPRnum > 0) {
+  if (STI.isSigModeSupport()) {
     const TargetRegisterClass &RC = RISCV::GPRRegClass;
     unsigned Size = RegInfo->getSpillSize(RC);
     Align Alignment = RegInfo->getSpillAlign(RC);
     Alignment = std::min(Alignment, getStackAlign());
+    if (GPRnum > 0) {
+      int FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
+      if ((unsigned)FrameIdx < MinCSFrameIndex)
+        MinCSFrameIndex = FrameIdx;
+      if ((unsigned)FrameIdx > MaxCSFrameIndex)
+        MaxCSFrameIndex = FrameIdx;
+      RVFI->setEncMapFrameIndex(FrameIdx);
+    }
     int FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
     if ((unsigned)FrameIdx < MinCSFrameIndex)
       MinCSFrameIndex = FrameIdx;
     if ((unsigned)FrameIdx > MaxCSFrameIndex)
       MaxCSFrameIndex = FrameIdx;
-    RVFI->setEncMapFrameIndex(FrameIdx);
+    RVFI->setOldIDSpFrameIndex(FrameIdx);
   }
 
   if (RVFI->useQCIInterrupt(MF)) {
