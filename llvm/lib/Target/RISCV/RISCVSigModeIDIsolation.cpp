@@ -158,13 +158,13 @@ bool RISCVSigModeIDIsolation::runOnFunction(Function &F, Module &M) {
   
   Changed |= processHeapAllocators(F, SetNewIDFn, PtrTy);
   
-  // // 2. Process allocas - collect them first
-  // Allocas.clear();
-  // visit(F);
+  // 2. Process allocas - collect them first
+  Allocas.clear();
+  visit(F);
   
-  // if (!Allocas.empty()) {
-  //   Changed |= processAllocas(F, SetNewIDFn, PtrTy);
-  // }
+  if (!Allocas.empty()) {
+    Changed |= processAllocas(F, SetNewIDFn, PtrTy);
+  }
   
   return Changed;
 }
@@ -310,15 +310,35 @@ static bool isUsedInAddrSpace100(AllocaInst *AI) {
   return false;
 }
 
+static bool containsPointer(Type *Ty) {
+  if (Ty->isPointerTy())
+    return true;
+
+  if (ArrayType *ATy = dyn_cast<ArrayType>(Ty))
+    return containsPointer(ATy->getElementType());
+
+  if (StructType *STy = dyn_cast<StructType>(Ty)) {
+    for (Type *ElemTy : STy->elements())
+      if (containsPointer(ElemTy))
+        return true;
+    return false;
+  }
+
+  if (auto *VTy = dyn_cast<FixedVectorType>(Ty))
+    return containsPointer(VTy->getElementType());
+
+  return false;
+}
+
 // Check if the allocated type is a struct, union (also represented as struct in LLVM),
 // or array type that needs ID isolation
 static bool needsIDIsolation(Type *AllocatedTy) {
   // Array types need isolation
-  if (AllocatedTy->isArrayTy())
+  if (AllocatedTy->isArrayTy() && containsPointer(AllocatedTy))
     return true;
   
   // Struct types (including unions) need isolation
-  if (AllocatedTy->isStructTy())
+  if (AllocatedTy->isStructTy() && containsPointer(AllocatedTy))
     return true;
   
   // Scalar types (int, float, ptr, etc.) don't need isolation
@@ -355,21 +375,11 @@ bool RISCVSigModeIDIsolation::processAllocas(Function &F, Function *SetNewIDFn,
     IRBuilder<> Builder(AI->getNextNode());
     Builder.SetCurrentDebugLocation(AI->getDebugLoc());
     
-    PointerType *AllocaPtrTy = AI->getType();
-    
     // If alloca type differs from generic ptr, we need to cast
     Value *AllocaPtr = AI;
-    if (AllocaPtrTy != PtrTy) {
-      AllocaPtr = Builder.CreateBitOrPointerCast(AI, PtrTy);
-    }
     
     // Create: %bounded = call ptr @llvm.riscv.xsig.setnewid(ptr %alloca)
     Value *BoundedPtr = Builder.CreateCall(SetNewIDFn, {AllocaPtr});
-    
-    // Cast back if needed
-    if (AllocaPtrTy != PtrTy) {
-      BoundedPtr = Builder.CreateBitOrPointerCast(BoundedPtr, AllocaPtrTy);
-    }
     
     // Replace all uses of the alloca with the bounded pointer
     // But we need to skip the setnewid call itself and any casts we just created
@@ -379,11 +389,6 @@ bool RISCVSigModeIDIsolation::processAllocas(Function &F, Function *SetNewIDFn,
       // Skip the instructions we just inserted
       if (User == AllocaPtr || User == BoundedPtr)
         continue;
-      // Skip if the use is part of the cast chain we created
-      if (auto *BC = dyn_cast<BitCastInst>(User)) {
-        if (BC == AllocaPtr)
-          continue;
-      }
       UsesToReplace.push_back(&U);
     }
     
