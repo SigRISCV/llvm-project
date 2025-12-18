@@ -401,6 +401,13 @@ bool RISCVSigModeIDIsolation::processAllocas(Function &F, Function *SetNewIDFn,
       // Skip the instructions we just inserted
       if (User == AllocaPtr || User == BoundedPtr)
         continue;
+      if (isa<CallInst>(User)) {
+        CallInst *CI = cast<CallInst>(User);
+        if (CI->getCalledFunction()->getName().starts_with("llvm.lifetime.start"))
+          continue;
+        if (CI->getCalledFunction()->getName().starts_with("llvm.lifetime.end"))
+          continue;
+      }
       UsesToReplace.push_back(&U);
     }
     
