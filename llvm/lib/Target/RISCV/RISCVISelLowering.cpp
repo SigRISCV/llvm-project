@@ -21875,6 +21875,32 @@ SDValue RISCVTargetLowering::PerformDAGCombine(SDNode *N,
                        DAG.getConstant(1, DL, XLenVT), N->getOperand(3),
                        N->getOperand(4));
   }
+  case RISCVISD::XSIG_SETRAWID:
+  case RISCVISD::XSIG_SETDUMMYID:
+  case RISCVISD::XSIG_SETNEWID: {
+    // Combine consecutive setid operations: setid(setid(x)) -> setid(x)
+    // For a chain like setnewid(setrawid(setdummyid(ptr))), only keep the
+    // outermost setid operation and skip all intermediate ones.
+    SDValue Input = N->getOperand(0);
+    
+    // Helper lambda to check if opcode is a setid operation
+    auto isSetIDOp = [](unsigned Opc) {
+      return Opc == RISCVISD::XSIG_SETRAWID ||
+             Opc == RISCVISD::XSIG_SETDUMMYID ||
+             Opc == RISCVISD::XSIG_SETNEWID;
+    };
+    
+    // Skip all intermediate setid operations
+    while (isSetIDOp(Input.getOpcode())) {
+      Input = Input.getOperand(0);
+    }
+    
+    // If Input changed, we eliminated some intermediate setid operations
+    if (Input != N->getOperand(0)) {
+      return DAG.getNode(N->getOpcode(), DL, N->getValueType(0), Input);
+    }
+    break;
+  }
   }
 
   return SDValue();
