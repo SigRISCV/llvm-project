@@ -36,6 +36,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -332,7 +333,9 @@ static bool containsPointer(Type *Ty) {
 
 // Check if the allocated type is a struct, union (also represented as struct in LLVM),
 // or array type that needs ID isolation
-static bool needsIDIsolation(Type *AllocatedTy) {
+static bool needsIDIsolation(AllocaInst *AI) {
+  Type *AllocatedTy = AI->getAllocatedType();
+
   // Array types need isolation
   if (AllocatedTy->isArrayTy() && containsPointer(AllocatedTy))
     return true;
@@ -341,7 +344,18 @@ static bool needsIDIsolation(Type *AllocatedTy) {
   if (AllocatedTy->isStructTy() && containsPointer(AllocatedTy))
     return true;
   
-  // Scalar types (int, float, ptr, etc.) don't need isolation
+  if (containsPointer(AllocatedTy)) {
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(AI->getArraySize())) {
+      if (CI->getZExtValue() > 1) {
+        return true;
+      }
+    } else {
+      // Non-constant array size with pointer element type
+      return true;
+    }
+  }
+
+    // Scalar types (int, float, ptr, etc.) don't need isolation
   return false;
 }
 
@@ -354,10 +368,8 @@ bool RISCVSigModeIDIsolation::processAllocas(Function &F, Function *SetNewIDFn,
     if (AI->use_empty())
       continue;
     
-    Type *AllocatedTy = AI->getAllocatedType();
-    
     // Only process struct/union/array types
-    if (!needsIDIsolation(AllocatedTy)) {
+    if (!needsIDIsolation(AI)) {
       LLVM_DEBUG(dbgs() << "Skipping non-aggregate alloca: " << *AI << "\n");
       continue;
     }
