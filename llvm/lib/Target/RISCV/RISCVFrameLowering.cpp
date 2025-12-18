@@ -2165,12 +2165,27 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
         MaxCSFrameIndex = FrameIdx;
       RVFI->setEncMapFrameIndex(FrameIdx);
     }
-    int FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
-    if ((unsigned)FrameIdx < MinCSFrameIndex)
-      MinCSFrameIndex = FrameIdx;
-    if ((unsigned)FrameIdx > MaxCSFrameIndex)
-      MaxCSFrameIndex = FrameIdx;
-    RVFI->setOldIDSpFrameIndex(FrameIdx);
+    // Skip stack frame ID isolation for functions with incoming stack arguments
+    // (FixedObjects) or varargs, because the caller writes arguments using
+    // its ID while the callee would read with a different ID after setnewid.
+    bool HasIncomingStackArgs = MFI.getNumFixedObjects() > 0;
+    bool IsVarArgFunction = RVFI->getVarArgsSaveSize() > 0;
+    // Also skip if the function has no local variables to protect
+    // (only has callee-saved registers). Count objects before CSI allocation:
+    // Total objects now = (original local vars) + (CSI slots) + (EncMapFrameIndex if allocated)
+    // Original local vars = NumObjects - CSI.size() - (EncMapFrameIndex ? 1 : 0)
+    unsigned NumObjectsBeforeCSI = MFI.getNumObjects() - MFI.getNumFixedObjects();
+    unsigned CSISlots = CSI.size();
+    unsigned EncMapSlots = RVFI->hasEncMapFrameIndex() ? 1 : 0;
+    bool HasLocalVariables = NumObjectsBeforeCSI > (CSISlots + EncMapSlots);
+    if (!HasIncomingStackArgs && !IsVarArgFunction && HasLocalVariables) {
+      int FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
+      if ((unsigned)FrameIdx < MinCSFrameIndex)
+        MinCSFrameIndex = FrameIdx;
+      if ((unsigned)FrameIdx > MaxCSFrameIndex)
+        MaxCSFrameIndex = FrameIdx;
+      RVFI->setOldIDSpFrameIndex(FrameIdx);
+    }
   }
 
   if (RVFI->useQCIInterrupt(MF)) {
