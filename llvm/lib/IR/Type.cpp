@@ -273,6 +273,26 @@ bool Type::isSizedDerivedType(SmallPtrSetImpl<Type*> *Visited) const {
   return cast<StructType>(this)->isSized(Visited);
 }
 
+bool Type::containsPointer() const {
+  if (this->isPointerTy())
+    return true;
+
+  if (const ArrayType *ATy = dyn_cast<ArrayType>(this))
+    return ATy->getElementType()->containsPointer();
+
+  if (const StructType *STy = dyn_cast<StructType>(this)) {
+    for (Type *ElemTy : STy->elements())
+      if (ElemTy->containsPointer())
+        return true;
+    return false;
+  }
+
+  if (auto *VTy = dyn_cast<FixedVectorType>(this))
+    return VTy->getElementType()->containsPointer();
+
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 //                          Primitive 'Type' data
 //===----------------------------------------------------------------------===//

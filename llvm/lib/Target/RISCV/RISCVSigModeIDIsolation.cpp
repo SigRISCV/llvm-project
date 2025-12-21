@@ -311,48 +311,29 @@ static bool isUsedInAddrSpace100(AllocaInst *AI) {
   return false;
 }
 
-static bool containsPointer(Type *Ty) {
-  if (Ty->isPointerTy())
-    return true;
-
-  if (ArrayType *ATy = dyn_cast<ArrayType>(Ty))
-    return containsPointer(ATy->getElementType());
-
-  if (StructType *STy = dyn_cast<StructType>(Ty)) {
-    for (Type *ElemTy : STy->elements())
-      if (containsPointer(ElemTy))
-        return true;
-    return false;
-  }
-
-  if (auto *VTy = dyn_cast<FixedVectorType>(Ty))
-    return containsPointer(VTy->getElementType());
-
-  return false;
-}
-
 // Check if the allocated type is a struct, union (also represented as struct in LLVM),
 // or array type that needs ID isolation
 static bool needsIDIsolation(AllocaInst *AI) {
   Type *AllocatedTy = AI->getAllocatedType();
 
+  if (!(AllocatedTy->containsPointer()))
+    return false;
+
   // Array types need isolation
-  if (AllocatedTy->isArrayTy() && containsPointer(AllocatedTy))
+  if (AllocatedTy->isArrayTy())
     return true;
   
   // Struct types (including unions) need isolation
-  if (AllocatedTy->isStructTy() && containsPointer(AllocatedTy))
+  if (AllocatedTy->isStructTy())
     return true;
   
-  if (containsPointer(AllocatedTy)) {
-    if (ConstantInt *CI = dyn_cast<ConstantInt>(AI->getArraySize())) {
-      if (CI->getZExtValue() > 1) {
-        return true;
-      }
-    } else {
-      // Non-constant array size with pointer element type
+  if (ConstantInt *CI = dyn_cast<ConstantInt>(AI->getArraySize())) {
+    if (CI->getZExtValue() > 1) {
       return true;
     }
+  } else {
+    // Non-constant array size with pointer element type
+    return true;
   }
 
     // Scalar types (int, float, ptr, etc.) don't need isolation

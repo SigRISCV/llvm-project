@@ -213,9 +213,6 @@ private:
   // Build the GOT map for all global variables
   void buildGOTMap(Module &M, const DataLayout &DL);
 
-  // Check if a type contains any pointer
-  bool containsPointer(Type *Ty);
-
   // Check if a type is "pointer-only" (only contains pointers, no other data)
   bool isPointerOnlyType(Type *Ty, const DataLayout &DL, unsigned PtrSize);
 
@@ -268,26 +265,6 @@ INITIALIZE_PASS(RISCVCollectGlobalPointers, DEBUG_TYPE,
 
 ModulePass *llvm::createRISCVCollectGlobalPointersPass() {
   return new RISCVCollectGlobalPointers();
-}
-
-bool RISCVCollectGlobalPointers::containsPointer(Type *Ty) {
-  if (Ty->isPointerTy())
-    return true;
-
-  if (ArrayType *ATy = dyn_cast<ArrayType>(Ty))
-    return containsPointer(ATy->getElementType());
-
-  if (StructType *STy = dyn_cast<StructType>(Ty)) {
-    for (Type *ElemTy : STy->elements())
-      if (containsPointer(ElemTy))
-        return true;
-    return false;
-  }
-
-  if (auto *VTy = dyn_cast<FixedVectorType>(Ty))
-    return containsPointer(VTy->getElementType());
-
-  return false;
 }
 
 bool RISCVCollectGlobalPointers::isPointerOnlyType(Type *Ty, const DataLayout &DL,
@@ -347,7 +324,7 @@ void RISCVCollectGlobalPointers::buildGOTMap(Module &M, const DataLayout &DL) {
       continue;
     }
 
-    if (!containsPointer(GV.getValueType())) {
+    if (!(GV.getValueType()->containsPointer())) {
       // Only Data Region Doesn't need Unique ID
       continue;
     }
@@ -515,7 +492,7 @@ void RISCVCollectGlobalPointers::collectAllPointers(
 
   if (ConstantAggregateZero *CAZ = dyn_cast<ConstantAggregateZero>(C)) {
     (void)CAZ;
-    if (containsPointer(Ty)) {
+    if (Ty->containsPointer()) {
       if (ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
         Type *ElemTy = ATy->getElementType();
         uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
@@ -557,7 +534,7 @@ void RISCVCollectGlobalPointers::collectPointerOffsetsFromType(
   // Handle array types
   if (ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
     Type *ElemTy = ATy->getElementType();
-    if (!containsPointer(ElemTy))
+    if (!ElemTy->containsPointer())
       return;
     
     uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
@@ -572,7 +549,7 @@ void RISCVCollectGlobalPointers::collectPointerOffsetsFromType(
     const StructLayout *SL = DL.getStructLayout(STy);
     for (unsigned I = 0; I < STy->getNumElements(); ++I) {
       Type *ElemTy = STy->getElementType(I);
-      if (containsPointer(ElemTy)) {
+      if (ElemTy->containsPointer()) {
         uint64_t ElemOffset = SL->getElementOffset(I);
         collectPointerOffsetsFromType(ElemTy, DL, BaseOffset + ElemOffset, Result);
       }
@@ -583,7 +560,7 @@ void RISCVCollectGlobalPointers::collectPointerOffsetsFromType(
   // Handle vector types
   if (auto *VTy = dyn_cast<FixedVectorType>(Ty)) {
     Type *ElemTy = VTy->getElementType();
-    if (!containsPointer(ElemTy))
+    if (!(ElemTy->containsPointer()))
       return;
     
     uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
@@ -1299,7 +1276,7 @@ bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
     }
 
     // Skip if type doesn't contain pointers
-    if (!containsPointer(GV.getValueType())) {
+    if (!(GV.getValueType()->containsPointer())) {
       LLVM_DEBUG(dbgs() << "Skipping non-pointer global: " << GV.getName() << "\n");
       continue;
     }
