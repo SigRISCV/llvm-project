@@ -51,6 +51,7 @@ add_llvm_target(RISCVCodeGen
   RISCVISelLowering.cpp
   RISCVCollectGlobalPointers.cpp
   RISCVSigModeIDIsolation.cpp
+  RISCVSigMemcpyExpand.cpp
   RISCVLandingPadSetup.cpp
   RISCVLateBranchOpt.cpp
   RISCVLoadStoreOptimizer.cpp

@@ -49,4 +49,17 @@ def int_riscv_xsig_debug_ptr : Intrinsic<[], [llvm_ptr_ty], [IntrNoMem, IntrHasS
 def int_riscv_xsig_debug_csr : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
   ClangBuiltin<"__builtin_riscv_xsig_debug_csr">;
 
+// SigMode memcpy intrinsic for copying structures/arrays with pointer members
+// Uses llvm_anyptr_ty to accept any address space (0 for sig, 100 for raw)
+// The 3rd operand is metadata containing the element type information
+// The 4th operand is the number of elements to copy
+def int_riscv_xsig_memcpy : Intrinsic<[],
+  [llvm_anyptr_ty,     // dest pointer (sig or raw)
+   llvm_anyptr_ty,     // src pointer (sig or raw)
+   llvm_metadata_ty,   // element type metadata
+   llvm_i64_ty],       // number of elements
+  [IntrArgMemOnly, IntrWillReturn,
+   NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
+   WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
+
 } // TargetPrefix = "riscv"

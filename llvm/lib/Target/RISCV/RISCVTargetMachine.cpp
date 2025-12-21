@@ -143,6 +143,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVPromoteConstantPass(*PR);
   initializeRISCVCollectGlobalPointersPass(*PR);
   initializeRISCVSigModeIDIsolationPass(*PR);
+  initializeRISCVSigMemcpyExpandPass(*PR);
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
@@ -465,6 +466,9 @@ void RISCVPassConfig::addIRPasses() {
 
   // Replace null pointers with setnewid for SigMode ID isolation
   addPass(createRISCVSigModeIDIsolationPass());
+
+  // Expand sigmemcpy intrinsics into member-wise copy with pointer re-signing
+  addPass(createRISCVSigMemcpyExpandPass());
 
   // Collect global pointers for SigMode support
   addPass(createRISCVCollectGlobalPointersPass());

@@ -121,6 +121,9 @@ void initializeRISCVCollectGlobalPointersPass(PassRegistry &);
 ModulePass *createRISCVSigModeIDIsolationPass();
 void initializeRISCVSigModeIDIsolationPass(PassRegistry &);
 
+ModulePass *createRISCVSigMemcpyExpandPass();
+void initializeRISCVSigMemcpyExpandPass(PassRegistry &);
+
 FunctionPass *createRISCVVLOptimizerPass();
 void initializeRISCVVLOptimizerPass(PassRegistry &);
 
