@@ -38,6 +38,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -96,7 +97,7 @@ private:
 
   // Generate a call to llvm.memcpy for types without pointers
   void emitMemcpyCall(IRBuilder<> &Builder, Value *Dest, Value *Src,
-                      uint64_t Size, unsigned DestAS, unsigned SrcAS);
+                      Value *Size, unsigned DestAS, unsigned SrcAS);
 
   // Get address space name string
   static StringRef getASName(unsigned AS) {
@@ -113,7 +114,7 @@ INITIALIZE_PASS(RISCVSigMemcpyExpand, DEBUG_TYPE,
 
 void RISCVSigMemcpyExpand::emitMemcpyCall(IRBuilder<> &Builder, 
                                            Value *Dest, Value *Src,
-                                           uint64_t Size, 
+                                           Value* Size, 
                                            unsigned DestAS, unsigned SrcAS) {
   // Get the appropriate pointer types for the address spaces
   Type *DestPtrTy = PointerType::get(*Ctx, DestAS);
@@ -124,8 +125,7 @@ void RISCVSigMemcpyExpand::emitMemcpyCall(IRBuilder<> &Builder,
   Value *SrcCast = Builder.CreatePointerCast(Src, SrcPtrTy);
   
   // Call llvm.memcpy.p<dest>.p<src>.i64
-  Builder.CreateMemCpy(DestCast, MaybeAlign(1), SrcCast, MaybeAlign(1), 
-                       Builder.getInt64(Size));
+  Builder.CreateMemCpy(DestCast, MaybeAlign(1), SrcCast, MaybeAlign(1), Size);
 }
 
 std::string RISCVSigMemcpyExpand::getMangledTypeName(Type *Ty) {
@@ -319,7 +319,7 @@ void RISCVSigMemcpyExpand::copyElementInFunc(IRBuilder<> &Builder,
         } else {
           // Use memcpy for types without pointers
           uint64_t Size = DL->getTypeAllocSize(MemberTy);
-          emitMemcpyCall(Builder, DestMember, SrcMember, Size, DestAS, SrcAS);
+          emitMemcpyCall(Builder, DestMember, SrcMember, Builder.getInt64(Size), DestAS, SrcAS);
         }
       } else {
         // Basic type or pointer: copy inline
@@ -350,7 +350,7 @@ void RISCVSigMemcpyExpand::copyElementInFunc(IRBuilder<> &Builder,
     } else {
       // No pointers in element type - use memcpy for the whole array
       uint64_t Size = DL->getTypeAllocSize(AT);
-      emitMemcpyCall(Builder, Dest, Src, Size, DestAS, SrcAS);
+      emitMemcpyCall(Builder, Dest, Src, Builder.getInt64(Size), DestAS, SrcAS);
     }
     
   } else {
@@ -363,7 +363,7 @@ void RISCVSigMemcpyExpand::copyElementInFunc(IRBuilder<> &Builder,
 bool RISCVSigMemcpyExpand::expandSigMemcpy(IntrinsicInst *II) {
   Value *Dest = II->getArgOperand(0);
   Value *Src = II->getArgOperand(1);
-  Value *LenVal = II->getArgOperand(3);
+  Value *LenVal = II->getArgOperand(2);  // Now index 2 (was 3)
   
   // Get address spaces
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
@@ -372,15 +372,18 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(IntrinsicInst *II) {
   LLVM_DEBUG(dbgs() << "Expanding sigmemcpy: dest AS=" << DestAS 
                     << ", src AS=" << SrcAS << "\n");
   
-  // Get the element type from metadata
-  auto *TypeMD = cast<MetadataAsValue>(II->getArgOperand(2));
-  auto *TypeNode = cast<ValueAsMetadata>(TypeMD->getMetadata());
-  Type *ElemTy = TypeNode->getType();
+  // Get the element type from instruction-level metadata
+  // Expected format: !sigmemcpy.type !N where !N = !{%struct.Type undef}
+  MDNode *TypeMD = II->getMetadata("sigmemcpy.type");
+  assert(TypeMD && TypeMD->getNumOperands() > 0 &&
+         "llvm.riscv.xsig.memcpy requires !sigmemcpy.type metadata");
   
-  if (!ElemTy) {
-    LLVM_DEBUG(dbgs() << "  Could not determine element type, skipping\n");
-    return false;
-  }
+  // Extract type from metadata: !{%struct.Type undef}
+  auto *TypeValue = dyn_cast<ValueAsMetadata>(TypeMD->getOperand(0));
+  assert(TypeValue && "Invalid !sigmemcpy.type metadata format");
+  
+  Type *ElemTy = TypeValue->getType();
+  assert(ElemTy && "Could not extract type from !sigmemcpy.type metadata");
   
   LLVM_DEBUG(dbgs() << "  Element type: " << *ElemTy << "\n");
   
@@ -400,12 +403,11 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(IntrinsicInst *II) {
     // Calculate total size
     if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
       uint64_t TotalSize = ElemSize * LenCI->getZExtValue();
-      emitMemcpyCall(Builder, Dest, Src, TotalSize, DestAS, SrcAS);
+      emitMemcpyCall(Builder, Dest, Src, Builder.getInt64(TotalSize), DestAS, SrcAS);
     } else {
       // Dynamic length: compute size at runtime
       Value *TotalSize = Builder.CreateMul(LenVal, Builder.getInt64(ElemSize));
-      Builder.CreateMemCpy(Dest, MaybeAlign(1), Src, MaybeAlign(1), 
-                           TotalSize);
+      emitMemcpyCall(Builder, Dest, Src, TotalSize, DestAS, SrcAS);
     }
   } else {
     // Need to generate helper function for pointer re-signing
