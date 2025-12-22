@@ -357,6 +357,12 @@ public:
     std::reverse(Writebacks.begin(), Writebacks.end());
   }
 
+  /// Set whether this call is to a raw function (SigMode).
+  void setIsRawCall(bool IsRaw) { IsRawCall = IsRaw; }
+
+  /// Returns whether this call is to a raw function (SigMode).
+  bool isRawCall() const { return IsRawCall; }
+
 private:
   SmallVector<Writeback, 1> Writebacks;
 
@@ -367,6 +373,9 @@ private:
 
   /// The stacksave call.  It dominates all of the argument evaluation.
   llvm::CallInst *StackBase = nullptr;
+
+  /// Whether this is a call to a raw function (SigMode).
+  bool IsRawCall = false;
 };
 
 /// FunctionArgList - Type for representing both the decl and type

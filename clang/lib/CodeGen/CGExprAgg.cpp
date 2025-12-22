@@ -26,6 +26,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -34,6 +35,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsRISCV.h"
+#include "llvm/Support/Casting.h"
 using namespace clang;
 using namespace CodeGen;
 
@@ -307,7 +309,12 @@ void AggExprEmitter::withReturnValueSlot(
   if (!UseTemp) {
     RetAddr = Dest.getAddress();
   } else {
-    RetAddr = CGF.CreateMemTempWithoutCast(RetTy, "tmp");
+    const CallExpr *CE = dyn_cast<CallExpr>(E);
+    const QualType pointee = cast<PointerType>(CE->getCallee()->getType())->getPointeeType();
+    const FunctionProtoType* functiontype = dyn_cast<FunctionProtoType>(pointee);
+    QualType TempRetTy = CGF.getContext().maybeAddRawQualifier(
+        RetTy, functiontype && functiontype->getExtInfo().getIsRaw());
+    RetAddr = CGF.CreateMemTemp(TempRetTy, "tmp");
     if (CGF.EmitLifetimeStart(RetAddr.getBasePointer())) {
       LifetimeStartInst =
           cast<llvm::IntrinsicInst>(std::prev(Builder.GetInsertPoint()));

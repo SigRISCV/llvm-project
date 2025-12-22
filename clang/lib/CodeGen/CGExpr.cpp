@@ -6621,6 +6621,7 @@ RValue CodeGenFunction::EmitCall(QualType CalleeType,
     EmitIgnoredExpr(E->getArg(0));
     Arguments = drop_begin(Arguments, 1);
   }
+
   EmitCallArgs(Args, dyn_cast<FunctionProtoType>(FnType), Arguments,
                E->getDirectCallee(), /*ParamsToSkip=*/0, Order);
 
