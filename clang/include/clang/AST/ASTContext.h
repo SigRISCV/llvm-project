@@ -2493,6 +2493,13 @@ public:
     return getExtQualType(Ptr, Qc);
   }
 
+  QualType maybeAddRawQualifier(QualType Ty, bool IsRawCall) {
+    if (IsRawCall && Ty->isRecordType()) {
+      return getQualifiedType(Ty, Qualifiers().withRaw());
+    }
+    return Ty;
+  }
+
   /// Return a type with additional qualifiers.
   QualType getQualifiedType(const Type *T, Qualifiers Qs) const {
     if (!Qs.hasNonFastQualifiers())
