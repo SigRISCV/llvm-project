@@ -1222,12 +1222,27 @@ void CodeGenFunction::emitStoresForConstant(const VarDecl &D, Address Loc,
   // If the initializer is all or mostly the same, codegen with bzero / memset
   // then do a few stores afterward.
   if (shouldUseBZeroPlusStoresToInitialize(constant, ConstantSize)) {
-    auto *I = Builder.CreateMemSet(Loc, llvm::ConstantInt::get(CGM.Int8Ty, 0),
-                                   SizeVal, isVolatile);
-    addInstToCurrentSourceAtom(I, nullptr);
+    // Check if we should use sigmemset instead of regular memset
+    // for structs containing pointers in sig address space
+    QualType VarTy = D.getType();
+    if (ShouldUseSigMemset(Loc, VarTy)) {
+      uint64_t num = 1;
+      if (const auto *AT = dyn_cast<ConstantArrayType>(VarTy.getTypePtr())) {
+        VarTy = AT->getElementType();
+        num = AT->getSize().getZExtValue();
+      }
+      auto *I = EmitSigMemsetCall(Loc, VarTy, num);
+      addInstToCurrentSourceAtom(I, nullptr);
+      if (IsAutoInit)
+        I->addAnnotationMetadata("auto-init");
+    } else {
+      auto *I = Builder.CreateMemSet(Loc, llvm::ConstantInt::get(CGM.Int8Ty, 0),
+                                     SizeVal, isVolatile);
+      addInstToCurrentSourceAtom(I, nullptr);
 
-    if (IsAutoInit)
-      I->addAnnotationMetadata("auto-init");
+      if (IsAutoInit)
+        I->addAnnotationMetadata("auto-init");
+    }
 
     bool valueAlreadyCorrect =
         constant->isNullValue() || isa<llvm::UndefValue>(constant);
@@ -1292,9 +1307,6 @@ void CodeGenFunction::emitStoresForConstant(const VarDecl &D, Address Loc,
   // Copy from a global.
   Address UnnamedGlobal = createUnnamedGlobalForMemcpyFrom(
                               CGM, D, Builder, constant, Loc.getAlignment());
-  DEBUG_FILE << "Emitting memcpy from unnamed global for variable '"
-             << D.getNameAsString() << "'\n";
-  DEBUG_FILE << "type: " << *Ty << "\n";
   llvm::CallInst* I;
   if (ShouldUseSigMemcpy(Loc, UnnamedGlobal, D.getType())) {
     QualType Ty = D.getType();

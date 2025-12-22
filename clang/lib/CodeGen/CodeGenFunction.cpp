@@ -3460,3 +3460,77 @@ llvm::CallInst* CodeGenFunction::EmitSigMemcpyCall(Address Dest, Address Src,
 
   return Call;
 }
+
+//===----------------------------------------------------------------------===//
+// SigMode memset support
+//===----------------------------------------------------------------------===//
+
+/// Check if we should use sigmemset for this zero-initialization.
+/// Returns true if:
+///  - SigMode is supported
+///  - dest is in sig address space (AS 0)
+///  - The type contains pointers (and is not a union)
+/// For pointer fields, sigmemset will store xsig_setdummyid(null) instead of 0.
+bool CodeGenFunction::ShouldUseSigMemset(Address DestPtr, QualType Ty) {
+  if (!getContext().getTargetInfo().isSigModeSupported())
+    return false;
+  
+  // Get address space (0 = sig, 100 = raw)
+  unsigned DestAS = DestPtr.getType()->getPointerAddressSpace();
+  
+  // Raw -> no need for sigmemset
+  constexpr unsigned RawAS = 100;
+  if (DestAS == RawAS)
+    return false;
+  
+  // Check if type contains pointers
+  bool HasPointers = Ty.getTypePtr()->isContainPointer();
+  if (!HasPointers)
+    return false;
+  
+  // Union containing pointers - emit warning and don't use sigmemset
+  if (Ty->isUnionType()) {
+    CGM.getDiags().Report(SourceLocation(),
+             diag::warn_sigmemset_union_with_pointers)
+        << Ty.getAsString();
+    return false;
+  }
+  
+  return true;
+}
+
+/// Emit a call to @llvm.riscv.xsig.memset with type metadata.
+/// This will zero-initialize the struct, but for pointer fields it will
+/// store xsig_setdummyid(null) instead of plain zero.
+llvm::CallInst* CodeGenFunction::EmitSigMemsetCall(Address Dest,
+                              QualType Ty, uint64_t NumElements) {
+  llvm::LLVMContext &VMContext = getLLVMContext();
+  llvm::Module &M = CGM.getModule();
+  
+  // Get the LLVM type for the element
+  llvm::Type *ElemTy = ConvertTypeForMem(Ty);
+  
+  // Get pointer type
+  llvm::Type *DestPtrTy = Dest.getType();
+  
+  // Get intrinsic ID
+  llvm::Intrinsic::ID IID = llvm::Intrinsic::riscv_xsig_memset;
+  
+  // Get the intrinsic declaration with appropriate pointer type
+  llvm::Function *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+      &M, IID, {DestPtrTy});
+  
+  // Create the call
+  llvm::CallInst *Call = Builder.CreateCall(Fn, {
+      Dest.emitRawPointer(*this),
+      llvm::ConstantInt::get(Int64Ty, NumElements)
+  });
+  
+  // Attach !sigmemset.type metadata: !{%Type undef}
+  llvm::Metadata *TypeMD = llvm::ValueAsMetadata::get(
+      llvm::UndefValue::get(ElemTy));
+  llvm::MDNode *MDN = llvm::MDNode::get(VMContext, {TypeMD});
+  Call->setMetadata("sigmemset.type", MDN);
+
+  return Call;
+}
