@@ -155,6 +155,10 @@ def warn_sigmemcpy_union_with_pointers : Warning<
   "copying union %0 containing pointers in SigMode may not re-sign correctly; "
   "consider manual handling">;
 
+def warn_sigmemset_union_with_pointers : Warning<
+  "set 0 union %0 containing pointers in SigMode may not re-sign correctly; "
+  "consider manual handling">;
+
 }
 
 let CategoryName = "Nullability Issue" in {

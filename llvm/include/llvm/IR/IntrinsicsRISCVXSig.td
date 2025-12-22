@@ -62,4 +62,16 @@ def int_riscv_xsig_memcpy : Intrinsic<[],
    NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
    WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
 
+// SigMode memset intrinsic for zero-initializing structures/arrays with pointer members
+// For pointer fields, stores xsig_setdummyid(null) instead of plain zero
+// Uses llvm_anyptr_ty to accept any address space (0 for sig, 100 for raw)
+// Type information is passed via instruction-level metadata (!sigmemset.type)
+// Usage: call void @llvm.riscv.xsig.memset.p0(ptr %d, i64 %n), !sigmemset.type !0
+//        !0 = !{%struct.MyStruct undef}
+def int_riscv_xsig_memset : Intrinsic<[],
+  [llvm_anyptr_ty,     // dest pointer (sig or raw)
+   llvm_i64_ty],       // number of elements
+  [IntrArgMemOnly, IntrWillReturn,
+   NoCapture<ArgIndex<0>>, WriteOnly<ArgIndex<0>>]>;
+
 } // TargetPrefix = "riscv"

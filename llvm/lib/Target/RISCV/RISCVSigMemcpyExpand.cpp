@@ -6,19 +6,25 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This pass expands the @llvm.riscv.xsig.memcpy intrinsic by generating
-// type-specific memcpy helper functions. Instead of inlining all code at the
-// call site (which causes code bloat), we generate modular functions like:
+// This pass expands the @llvm.riscv.xsig.memcpy and @llvm.riscv.xsig.memset
+// intrinsics by generating type-specific helper functions. Instead of inlining
+// all code at the call site (which causes code bloat), we generate modular
+// functions like:
 //
 //   @__sigmemcpy_sig_sig_StructName(ptr %dest, ptr %src, i64 %len)
 //   @__sigmemcpy_raw_sig_StructName(ptr addrspace(100) %dest, ptr %src, i64 %len)
+//   @__sigmemset_sig_StructName(ptr %dest, i64 %len)
 //
-// Each generated function contains a loop over elements and member-wise copy.
+// Each generated function contains a loop over elements and member-wise copy/zero.
 // For nested structs/arrays, it calls the corresponding helper function.
 // The inliner can later decide whether to inline these based on size.
 //
 // Function naming convention:
 //   @__sigmemcpy_<dest_as>_<src_as>_<type_mangled_name>
+//   @__sigmemset_<dest_as>_<type_mangled_name>
+//
+// For sigmemset, pointer fields are initialized with xsig_setdummyid(null)
+// instead of plain zero, ensuring proper ID encoding.
 //
 //===----------------------------------------------------------------------===//
 
@@ -44,9 +50,10 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "riscv-sig-memcpy-expand"
-#define RISCV_SIG_MEMCPY_EXPAND_NAME "RISC-V SigMode Memcpy Expansion"
+#define RISCV_SIG_MEMCPY_EXPAND_NAME "RISC-V SigMode Memcpy/Memset Expansion"
 
 STATISTIC(NumMemcpyExpanded, "Number of sigmemcpy intrinsics expanded");
+STATISTIC(NumMemsetExpanded, "Number of sigmemset intrinsics expanded");
 STATISTIC(NumHelperFuncsCreated, "Number of helper functions created");
 
 namespace {
@@ -77,6 +84,10 @@ private:
   // Cache of generated helper functions: name -> Function*
   StringMap<Function *> HelperFuncCache;
 
+  //===--------------------------------------------------------------------===//
+  // Sigmemcpy functions
+  //===--------------------------------------------------------------------===//
+  
   // Expand a single sigmemcpy intrinsic call
   bool expandSigMemcpy(IntrinsicInst *II);
 
@@ -92,12 +103,40 @@ private:
   void copyElementInFunc(IRBuilder<> &Builder, Value *Dest, Value *Src, 
                          Type *Ty, unsigned DestAS, unsigned SrcAS);
 
+  //===--------------------------------------------------------------------===//
+  // Sigmemset functions
+  //===--------------------------------------------------------------------===//
+  
+  // Expand a single sigmemset intrinsic call
+  bool expandSigMemset(IntrinsicInst *II);
+
+  // Get or create a helper function for memset with given type and address space
+  Function *getOrCreateMemsetFunc(Type *ElemTy, unsigned DestAS);
+
+  // Generate the function body for a memset helper
+  void generateMemsetFuncBody(Function *F, Type *ElemTy, unsigned DestAS);
+
+  // Zero-initialize a single element within a generated function body
+  // For pointer fields, uses the pre-computed DummyNull value (xsig_setdummyid(null))
+  // DummyNull is created once at function entry and reused for all pointer stores
+  // This function is only called for sig address space (AS 0)
+  void zeroElementInFunc(IRBuilder<> &Builder, Value *Dest, 
+                         Type *Ty, unsigned DestAS, Value *DummyNull);
+
+  //===--------------------------------------------------------------------===//
+  // Utility functions
+  //===--------------------------------------------------------------------===//
+
   // Get mangled name for a type
   std::string getMangledTypeName(Type *Ty);
 
   // Generate a call to llvm.memcpy for types without pointers
   void emitMemcpyCall(IRBuilder<> &Builder, Value *Dest, Value *Src,
                       Value *Size, unsigned DestAS, unsigned SrcAS);
+
+  // Generate a call to llvm.memset for types without pointers
+  void emitMemsetCall(IRBuilder<> &Builder, Value *Dest, Value *Size,
+                      unsigned DestAS);
 
   // Get address space name string
   static StringRef getASName(unsigned AS) {
@@ -128,6 +167,19 @@ void RISCVSigMemcpyExpand::emitMemcpyCall(IRBuilder<> &Builder,
   Builder.CreateMemCpy(DestCast, MaybeAlign(1), SrcCast, MaybeAlign(1), Size);
 }
 
+void RISCVSigMemcpyExpand::emitMemsetCall(IRBuilder<> &Builder, 
+                                           Value *Dest, Value* Size, 
+                                           unsigned DestAS) {
+  // Get the appropriate pointer type for the address space
+  Type *DestPtrTy = PointerType::get(*Ctx, DestAS);
+  
+  // Cast pointer if needed
+  Value *DestCast = Builder.CreatePointerCast(Dest, DestPtrTy);
+  
+  // Call llvm.memset.p<dest>.i64 with zero
+  Builder.CreateMemSet(DestCast, Builder.getInt8(0), Size, MaybeAlign(1));
+}
+
 std::string RISCVSigMemcpyExpand::getMangledTypeName(Type *Ty) {
   std::string Name;
   raw_string_ostream OS(Name);
@@ -148,7 +200,7 @@ std::string RISCVSigMemcpyExpand::getMangledTypeName(Type *Ty) {
     }
   } else if (Ty->isPointerTy()) {
     OS << "ptr";
-  } else if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+  } else if (const auto *AT = dyn_cast<ArrayType>(Ty)) {
     assert(false && "Array type should be handled elsewhere");
     // OS << "arr" << AT->getNumElements() << "_" 
     //    << getMangledTypeName(AT->getElementType());
@@ -422,6 +474,254 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(IntrinsicInst *II) {
   return true;
 }
 
+//===----------------------------------------------------------------------===//
+// Sigmemset expansion
+//===----------------------------------------------------------------------===//
+
+Function *RISCVSigMemcpyExpand::getOrCreateMemsetFunc(Type *ElemTy, 
+                                                       unsigned DestAS) {
+  // Build function name
+  std::string FuncName = "__sigmemset_";
+  FuncName += getASName(DestAS);
+  FuncName += "_";
+  FuncName += getMangledTypeName(ElemTy);
+  
+  // Check cache first
+  auto It = HelperFuncCache.find(FuncName);
+  if (It != HelperFuncCache.end()) {
+    return It->second;
+  }
+  
+  // Check if function already exists in module
+  if (Function *ExistingF = Mod->getFunction(FuncName)) {
+    HelperFuncCache[FuncName] = ExistingF;
+    return ExistingF;
+  }
+  
+  LLVM_DEBUG(dbgs() << "Creating memset helper function: " << FuncName << "\n");
+  
+  // Create function type: void (ptr dest, i64 len)
+  Type *DestPtrTy = PointerType::get(*Ctx, DestAS);
+  Type *I64Ty = Type::getInt64Ty(*Ctx);
+  
+  FunctionType *FT = FunctionType::get(
+      Type::getVoidTy(*Ctx),
+      {DestPtrTy, I64Ty},
+      false);
+  
+  Function *F = Function::Create(FT, GlobalValue::InternalLinkage, 
+                                 FuncName, Mod);
+  
+  // Set attributes for optimization
+  F->addFnAttr(Attribute::NoUnwind);
+  F->addFnAttr(Attribute::WillReturn);
+  
+  // Name the arguments
+  auto *ArgIt = F->arg_begin();
+  ArgIt->setName("dest"); ++ArgIt;
+  ArgIt->setName("len");
+  
+  // Generate function body
+  generateMemsetFuncBody(F, ElemTy, DestAS);
+  
+  HelperFuncCache[FuncName] = F;
+  NumHelperFuncsCreated++;
+  
+  return F;
+}
+
+void RISCVSigMemcpyExpand::generateMemsetFuncBody(Function *F, Type *ElemTy,
+                                                   unsigned DestAS) {
+  // This function is only called for sig address space (AS 0)
+  // because raw AS or types without pointers use regular memset
+  assert(DestAS == 0 && "generateMemsetFuncBody should only be called for sig AS");
+  
+  BasicBlock *EntryBB = BasicBlock::Create(*Ctx, "entry", F);
+  BasicBlock *LoopBB = BasicBlock::Create(*Ctx, "loop", F);
+  BasicBlock *BodyBB = BasicBlock::Create(*Ctx, "body", F);
+  BasicBlock *ExitBB = BasicBlock::Create(*Ctx, "exit", F);
+  
+  auto *ArgIt = F->arg_begin();
+  Value *Dest = &*ArgIt++;
+  Value *Len = &*ArgIt;
+  
+  IRBuilder<> Builder(EntryBB);
+  
+  // Pre-compute xsig_setdummyid(null) once at function entry
+  // This value will be reused for all pointer field initializations
+  Type *DefaultPtrTy = PointerType::get(*Ctx, 0);
+  Value *NullPtr = ConstantPointerNull::get(cast<PointerType>(DefaultPtrTy));
+  
+  // Call xsig_setdummyid(null) once
+  FunctionType *SetDummyIdTy = FunctionType::get(DefaultPtrTy, {DefaultPtrTy}, false);
+  FunctionCallee SetDummyIdFn = Mod->getOrInsertFunction(
+      "llvm.riscv.xsig.setdummyid", SetDummyIdTy);
+  Value *DummyNull = Builder.CreateCall(SetDummyIdFn, {NullPtr}, "dummy.null");
+  
+  // Entry: check if len > 0, if not, skip to exit
+  Value *LenGtZero = Builder.CreateICmpUGT(Len, Builder.getInt64(0), "len.gt.zero");
+  Builder.CreateCondBr(LenGtZero, LoopBB, ExitBB);
+  
+  // Loop header with PHI for index
+  Builder.SetInsertPoint(LoopBB);
+  PHINode *IdxPhi = Builder.CreatePHI(Builder.getInt64Ty(), 2, "idx");
+  IdxPhi->addIncoming(Builder.getInt64(0), EntryBB);
+  Builder.CreateBr(BodyBB);
+  
+  // Loop body: zero one element
+  Builder.SetInsertPoint(BodyBB);
+  
+  // Calculate element address using GEP
+  Value *DestElem = Builder.CreateGEP(ElemTy, Dest, IdxPhi, "dest.elem");
+  
+  // Zero the element (may generate calls to other helper functions)
+  zeroElementInFunc(Builder, DestElem, ElemTy, DestAS, DummyNull);
+  
+  // Increment index and check loop condition
+  Value *NextIdx = Builder.CreateAdd(IdxPhi, Builder.getInt64(1), "idx.next");
+  IdxPhi->addIncoming(NextIdx, Builder.GetInsertBlock());
+  
+  Value *Continue = Builder.CreateICmpULT(NextIdx, Len, "loop.cond");
+  Builder.CreateCondBr(Continue, LoopBB, ExitBB);
+  
+  // Exit block
+  Builder.SetInsertPoint(ExitBB);
+  Builder.CreateRetVoid();
+}
+
+void RISCVSigMemcpyExpand::zeroElementInFunc(IRBuilder<> &Builder, 
+                                              Value *Dest, Type *Ty,
+                                              unsigned DestAS, Value *DummyNull) {
+  // This function is only called for sig address space (AS 0)
+  // Raw address space uses regular memset, no helper function needed
+  assert(DestAS == 0 && "zeroElementInFunc should only be called for sig AS");
+  assert(DummyNull && "DummyNull must be pre-computed for sig AS");
+  
+  if (Ty->isPointerTy()) {
+    // Pointer type: store the pre-computed DummyNull (xsig_setdummyid(null))
+    Builder.CreateStore(DummyNull, Dest);
+  } else if (auto *ST = dyn_cast<StructType>(Ty)) {
+    // Struct type: zero each member
+    for (unsigned I = 0; I < ST->getNumElements(); I++) {
+      Type *MemberTy = ST->getElementType(I);
+      Value *DestMember = Builder.CreateStructGEP(ST, Dest, I, "dest.member");
+      
+      if (isa<StructType>(MemberTy) || isa<ArrayType>(MemberTy)) {
+        // For nested composite types, check if they contain pointers
+        if (MemberTy->containsPointer()) {
+          // Call helper function for types with pointers
+          if (isa<StructType>(MemberTy)) {
+            Function *HelperF = getOrCreateMemsetFunc(MemberTy, DestAS);
+            Builder.CreateCall(HelperF, {DestMember, Builder.getInt64(1)});
+          } else {
+            // Array type
+            Type *ElemTy = cast<ArrayType>(MemberTy)->getElementType();
+            uint64_t NumElems = cast<ArrayType>(MemberTy)->getNumElements();
+            Function *HelperF = getOrCreateMemsetFunc(ElemTy, DestAS);
+            Builder.CreateCall(HelperF, {DestMember, Builder.getInt64(NumElems)});
+          }
+        } else {
+          // Use memset for types without pointers
+          uint64_t Size = DL->getTypeAllocSize(MemberTy);
+          emitMemsetCall(Builder, DestMember, Builder.getInt64(Size), DestAS);
+        }
+      } else {
+        // Basic type or pointer: zero inline
+        zeroElementInFunc(Builder, DestMember, MemberTy, DestAS, DummyNull);
+      }
+    }
+    
+  } else if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+    // Array type
+    Type *ElemTy = AT->getElementType();
+    uint64_t NumElems = AT->getNumElements();
+    
+    // Check if element type contains pointers
+    if (ElemTy->containsPointer()) {
+      // Need to process each element for proper pointer zeroing
+      if (isa<StructType>(ElemTy) || isa<ArrayType>(ElemTy)) {
+        // Call helper function for composite element types
+        Function *HelperF = getOrCreateMemsetFunc(ElemTy, DestAS);
+        Builder.CreateCall(HelperF, {Dest, Builder.getInt64(NumElems)});
+      } else {
+        // Array of pointers - process each
+        for (uint64_t I = 0; I < NumElems; I++) {
+          Value *DestElem = Builder.CreateConstGEP2_64(AT, Dest, 0, I, "dest.arr");
+          zeroElementInFunc(Builder, DestElem, ElemTy, DestAS, DummyNull);
+        }
+      }
+    } else {
+      // No pointers in element type - use memset for the whole array
+      uint64_t Size = DL->getTypeAllocSize(AT);
+      emitMemsetCall(Builder, Dest, Builder.getInt64(Size), DestAS);
+    }
+    
+  } else {
+    // Basic type: store zero
+    Value *Zero = Constant::getNullValue(Ty);
+    Builder.CreateStore(Zero, Dest);
+  }
+}
+
+bool RISCVSigMemcpyExpand::expandSigMemset(IntrinsicInst *II) {
+  Value *Dest = II->getArgOperand(0);
+  Value *LenVal = II->getArgOperand(1);
+  
+  // Get address space
+  unsigned DestAS = Dest->getType()->getPointerAddressSpace();
+  
+  LLVM_DEBUG(dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n");
+  
+  // Get the element type from instruction-level metadata
+  // Expected format: !sigmemset.type !N where !N = !{%struct.Type undef}
+  MDNode *TypeMD = II->getMetadata("sigmemset.type");
+  assert(TypeMD && TypeMD->getNumOperands() > 0 &&
+         "llvm.riscv.xsig.memset requires !sigmemset.type metadata");
+  
+  // Extract type from metadata: !{%struct.Type undef}
+  auto *TypeValue = dyn_cast<ValueAsMetadata>(TypeMD->getOperand(0));
+  assert(TypeValue && "Invalid !sigmemset.type metadata format");
+  
+  Type *ElemTy = TypeValue->getType();
+  assert(ElemTy && "Could not extract type from !sigmemset.type metadata");
+  
+  LLVM_DEBUG(dbgs() << "  Element type: " << *ElemTy << "\n");
+  
+  IRBuilder<> Builder(II);
+  
+  // Optimization 1: For raw address space, just use regular memset
+  // Optimization 2: For types without pointers, just use regular memset
+  bool IsRaw = (DestAS == RawAS);
+  bool HasPointers = ElemTy->containsPointer();
+  
+  if (IsRaw || !HasPointers) {
+    LLVM_DEBUG(dbgs() << "  Using llvm.memset (raw=" << IsRaw 
+                      << ", has_pointers=" << HasPointers << ")\n");
+    
+    uint64_t ElemSize = DL->getTypeAllocSize(ElemTy);
+    
+    // Calculate total size
+    if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
+      uint64_t TotalSize = ElemSize * LenCI->getZExtValue();
+      emitMemsetCall(Builder, Dest, Builder.getInt64(TotalSize), DestAS);
+    } else {
+      // Dynamic length: compute size at runtime
+      Value *TotalSize = Builder.CreateMul(LenVal, Builder.getInt64(ElemSize));
+      emitMemsetCall(Builder, Dest, TotalSize, DestAS);
+    }
+  } else {
+    // Need to generate helper function for proper pointer zeroing
+    Function *HelperF = getOrCreateMemsetFunc(ElemTy, DestAS);
+    Builder.CreateCall(HelperF, {Dest, LenVal});
+  }
+  
+  // Remove the original intrinsic call
+  II->eraseFromParent();
+  NumMemsetExpanded++;
+  
+  return true;
+}
+
 bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   // Check if we should run this pass
   auto &TPC = getAnalysis<TargetPassConfig>();
@@ -439,8 +739,9 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   
   bool Changed = false;
   
-  // Collect all sigmemcpy calls first (to avoid iterator invalidation)
+  // Collect all sigmemcpy and sigmemset calls first (to avoid iterator invalidation)
   SmallVector<IntrinsicInst *, 16> SigMemcpyCalls;
+  SmallVector<IntrinsicInst *, 16> SigMemsetCalls;
   
   for (Function &F : M) {
     if (F.isDeclaration())
@@ -450,9 +751,11 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
       for (Instruction &I : BB) {
         if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
           // Check by intrinsic name since it's an overloaded intrinsic
-          if (II->getCalledFunction()->getName().starts_with(
-                  "llvm.riscv.xsig.memcpy")) {
+          StringRef Name = II->getCalledFunction()->getName();
+          if (Name.starts_with("llvm.riscv.xsig.memcpy")) {
             SigMemcpyCalls.push_back(II);
+          } else if (Name.starts_with("llvm.riscv.xsig.memset")) {
+            SigMemsetCalls.push_back(II);
           }
         }
       }
@@ -462,6 +765,11 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   // Expand each sigmemcpy call
   for (IntrinsicInst *II : SigMemcpyCalls) {
     Changed |= expandSigMemcpy(II);
+  }
+  
+  // Expand each sigmemset call
+  for (IntrinsicInst *II : SigMemsetCalls) {
+    Changed |= expandSigMemset(II);
   }
   
   return Changed;
