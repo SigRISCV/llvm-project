@@ -34,8 +34,6 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/IntrinsicsRISCV.h"
-#include "llvm/Support/Casting.h"
 using namespace clang;
 using namespace CodeGen;
 
@@ -2253,80 +2251,6 @@ AggValueSlot::Overlap_t CodeGenFunction::getOverlapForBaseInit(
   return AggValueSlot::MayOverlap;
 }
 
-//===----------------------------------------------------------------------===//
-// SigMode memcpy support
-//===----------------------------------------------------------------------===//
-
-/// Check if we should use sigmemcpy for this aggregate copy.
-/// Returns true if:
-///  - SigMode is supported
-///  - At least one of dest/src is in sig address space (AS 0)
-///  - The type contains pointers (and is not a union)
-/// Emits warning for union types that contain pointers.
-static bool ShouldUseSigMemcpy(CodeGenFunction &CGF, Address DestPtr,
-                               Address SrcPtr, QualType Ty) {
-  if (!CGF.getContext().getTargetInfo().isSigModeSupported())
-    return false;
-  
-  // Get address spaces (0 = sig, 100 = raw)
-  unsigned DestAS = DestPtr.getType()->getPointerAddressSpace();
-  unsigned SrcAS = SrcPtr.getType()->getPointerAddressSpace();
-  
-  // Both raw -> no need for sigmemcpy
-  constexpr unsigned RawAS = 100;
-  if (DestAS == RawAS && SrcAS == RawAS)
-    return false;
-  
-  // Check if type contains pointers
-  bool HasPointers = Ty.getTypePtr()->isContainPointer();
-  if (!HasPointers)
-    return false;
-  
-  // Union containing pointers - emit warning and don't use sigmemcpy
-  if (Ty->isUnionType()) {
-    CGF.CGM.getDiags().Report(SourceLocation(),
-             diag::warn_sigmemcpy_union_with_pointers)
-        << Ty.getAsString();
-    return false;
-  }
-  
-  return true;
-}
-
-/// Emit a call to @llvm.riscv.xsig.memcpy with type metadata.
-static void EmitSigMemcpyCall(CodeGenFunction &CGF, Address Dest, Address Src,
-                              QualType Ty, uint64_t NumElements) {
-  llvm::LLVMContext &VMContext = CGF.getLLVMContext();
-  llvm::Module &M = CGF.CGM.getModule();
-  
-  // Get the LLVM type for the element
-  llvm::Type *ElemTy = CGF.ConvertTypeForMem(Ty);
-  
-  // Get pointer types
-  llvm::Type *DestPtrTy = Dest.getType();
-  llvm::Type *SrcPtrTy = Src.getType();
-  
-  // Get intrinsic ID by name (since it's defined in target-specific tablegen)
-  llvm::Intrinsic::ID IID = llvm::Intrinsic::riscv_xsig_memcpy;
-  
-  // Get the intrinsic declaration with appropriate pointer types
-  llvm::Function *Fn = llvm::Intrinsic::getOrInsertDeclaration(
-      &M, IID, {DestPtrTy, SrcPtrTy});
-  
-  // Create the call
-  llvm::CallInst *Call = CGF.Builder.CreateCall(Fn, {
-      Dest.emitRawPointer(CGF),
-      Src.emitRawPointer(CGF),
-      llvm::ConstantInt::get(CGF.Int64Ty, NumElements)
-  });
-  
-  // Attach !sigmemcpy.type metadata: !{%Type undef}
-  llvm::Metadata *TypeMD = llvm::ValueAsMetadata::get(
-      llvm::UndefValue::get(ElemTy));
-  llvm::MDNode *MDN = llvm::MDNode::get(VMContext, {TypeMD});
-  Call->setMetadata("sigmemcpy.type", MDN);
-}
-
 void CodeGenFunction::EmitAggregateCopy(LValue Dest, LValue Src, QualType Ty,
                                         AggValueSlot::Overlap_t MayOverlap,
                                         bool isVolatile) {
@@ -2415,8 +2339,8 @@ void CodeGenFunction::EmitAggregateCopy(LValue Dest, LValue Src, QualType Ty,
 
   // SigMode: Check if we should use sigmemcpy instead of regular memcpy
   // This must be done before converting pointers to i8*, to preserve address space info
-  if (ShouldUseSigMemcpy(*this, DestPtr, SrcPtr, Ty)) {
-    EmitSigMemcpyCall(*this, DestPtr, SrcPtr, Ty, /*NumElements=*/1);
+  if (ShouldUseSigMemcpy(DestPtr, SrcPtr, Ty)) {
+    EmitSigMemcpyCall(DestPtr, SrcPtr, Ty, /*NumElements=*/1);
     return;
   }
 

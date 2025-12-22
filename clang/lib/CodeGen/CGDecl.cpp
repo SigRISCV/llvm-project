@@ -30,6 +30,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenACC.h"
 #include "clang/AST/DeclOpenMP.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/TargetInfo.h"
@@ -1163,7 +1164,7 @@ Address CodeGenModule::createUnnamedGlobalFrom(const VarDecl &D,
     bool isConstant = true;
     llvm::GlobalVariable *InsertBefore = nullptr;
     LangAS as = GetGlobalConstantAddressSpace();
-    if (D.getType().isRawQualified() && !D.getType().hasAddressSpace()) {
+    if (!D.getType().hasAddressSpace()) {
       as = LangAS::sigmode_raw;
     }
     unsigned AS =
@@ -1289,11 +1290,23 @@ void CodeGenFunction::emitStoresForConstant(const VarDecl &D, Address Loc,
   }
 
   // Copy from a global.
-  auto *I =
-      Builder.CreateMemCpy(Loc,
-                           createUnnamedGlobalForMemcpyFrom(
-                               CGM, D, Builder, constant, Loc.getAlignment()),
-                           SizeVal, isVolatile);
+  Address UnnamedGlobal = createUnnamedGlobalForMemcpyFrom(
+                              CGM, D, Builder, constant, Loc.getAlignment());
+  DEBUG_FILE << "Emitting memcpy from unnamed global for variable '"
+             << D.getNameAsString() << "'\n";
+  DEBUG_FILE << "type: " << *Ty << "\n";
+  llvm::CallInst* I;
+  if (ShouldUseSigMemcpy(Loc, UnnamedGlobal, D.getType())) {
+    QualType Ty = D.getType();
+    uint64_t num = 1;
+    if (const auto *AT = dyn_cast<ConstantArrayType>(Ty.getTypePtr())) {
+      Ty = AT->getElementType();
+      num = AT->getSize().getZExtValue();
+    }
+    I = EmitSigMemcpyCall(Loc, UnnamedGlobal, Ty, num);
+  } else {
+    I = Builder.CreateMemCpy(Loc, UnnamedGlobal, SizeVal, isVolatile);
+  }
   addInstToCurrentSourceAtom(I, nullptr);
 
   if (IsAutoInit)

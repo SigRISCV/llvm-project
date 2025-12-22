@@ -3029,6 +3029,11 @@ public:
   void EmitAggregateCopy(LValue Dest, LValue Src, QualType EltTy,
                          AggValueSlot::Overlap_t MayOverlap,
                          bool isVolatile = false);
+  
+  bool ShouldUseSigMemcpy(Address DestPtr, Address SrcPtr, QualType Ty);
+
+  llvm::CallInst* EmitSigMemcpyCall(Address Dest, Address Src,
+                              QualType Ty, uint64_t NumElements);
 
   /// GetAddrOfLocalVar - Return the address of a local variable.
   Address GetAddrOfLocalVar(const VarDecl *VD) {
