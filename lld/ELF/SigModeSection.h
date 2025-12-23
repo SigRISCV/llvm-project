@@ -44,7 +44,7 @@ struct Ctx;
 
 // Section names for SigMode
 constexpr const char *sigSectionGOT = ".sig_got";
-constexpr const char *sigSectionCounter = ".sig_ptr_header_counter";
+constexpr const char *sigSectionHeader = ".sig_header";
 constexpr const char *sigSectionHeaderSingle = ".sig_ptr_header_single";
 constexpr const char *sigSectionHeaderContigSame = ".sig_ptr_header_contig_same";
 constexpr const char *sigSectionHeaderContigDiff = ".sig_ptr_header_contig_diff";
@@ -57,6 +57,32 @@ constexpr const char *sigSectionOffsetSparseDiff = ".sig_offset_sparse_diff";
 constexpr const char *sigSectionSymtab = ".sig_symtab";
 constexpr const char *sigSectionExtGOT = ".sig_ext_got";
 constexpr const char *sigSectionExtFixupData = ".sig_ext_fixup_data";
+
+// .sig_header section layout constants
+// Layout:
+//   7 x uint64_t counters (56 bytes)
+//   + 10 x int64_t segment offsets (80 bytes)
+//   + 1 x int64_t .got section offset (8 bytes)
+//   + 1 x uint64_t .got entry count (8 bytes)
+//   = 152 bytes total
+//
+// The segment offsets are relative to .sig_header's address, not absolute addresses.
+// This avoids the need for PIE relocation. The loader can compute actual addresses as:
+//   section_addr = sig_header_addr + offset
+// If a section doesn't exist, its offset is 0.
+constexpr size_t sigHeaderCounterCount = 6;      // Number of counters to merge (first 6)
+constexpr size_t sigHeaderReservedCount = 1;     // Reserved counter (7th, not merged)
+constexpr size_t sigHeaderTotalCounters = 7;     // Total counters
+constexpr size_t sigHeaderSegAddrCount = 10;     // Number of segment offsets
+constexpr size_t sigHeaderCountersSize = sigHeaderTotalCounters * sizeof(uint64_t);  // 56 bytes
+constexpr size_t sigHeaderSegAddrsSize = sigHeaderSegAddrCount * sizeof(uint64_t);   // 80 bytes
+constexpr size_t sigHeaderGotOffsetSize = sizeof(uint64_t);   // 8 bytes for .got offset
+constexpr size_t sigHeaderGotCountSize = sizeof(uint64_t);    // 8 bytes for .got entry count
+constexpr size_t sigHeaderTotalSize = sigHeaderCountersSize + sigHeaderSegAddrsSize 
+                                     + sigHeaderGotOffsetSize + sigHeaderGotCountSize; // 152 bytes
+constexpr size_t sigHeaderSegAddrsOffset = sigHeaderCountersSize;  // Offset to segment offsets (56)
+constexpr size_t sigHeaderGotOffsetOffset = sigHeaderSegAddrsOffset + sigHeaderSegAddrsSize; // Offset to .got offset (136)
+constexpr size_t sigHeaderGotCountOffset = sigHeaderGotOffsetOffset + sigHeaderGotOffsetSize; // Offset to .got count (144)
 
 // Special ID values that should not be relocated
 constexpr uint32_t sigExternalID = 0xFFFFFF;
@@ -92,6 +118,32 @@ void convertSigGotInPlace(Ctx &ctx);
 // 4. Removes temporary sections (.sig_ext_got, .sig_symtab, .sig_ext_fixup_data)
 template <class ELFT>
 void resolveExternalGotReferences(Ctx &ctx);
+
+// Fill in segment offsets in the .sig_header section
+// This should be called after all section addresses are finalized
+//
+// The function writes the relative offsets (relative to .sig_header) of the
+// following sections (in order) to the segment offset area of .sig_header:
+// [0] .sig_ptr_header_single
+// [1] .sig_ptr_header_contig_same
+// [2] .sig_ptr_header_contig_diff
+// [3] .sig_ptr_header_sparse_same
+// [4] .sig_ptr_header_sparse_diff
+// [5] .sig_offset_sparse_same
+// [6] .sig_offset_sparse_diff
+// [7] .sig_id_contig_diff
+// [8] .sig_id_sparse_diff
+// [9] .sig_got
+//
+// Additionally writes:
+// - .got section offset (relative to .sig_header)
+// - .got entry count
+//
+// Offsets are signed 64-bit values. The loader can compute actual addresses as:
+//   section_addr = sig_header_addr + offset
+// If a section doesn't exist, its offset is set to 0.
+template <class ELFT>
+void fillSigHeaderSegmentAddresses(Ctx &ctx);
 
 } // namespace elf
 } // namespace lld

@@ -53,7 +53,7 @@ private:
   InputSectionBase *mergedCounterSec = nullptr;  // The first counter section (will be updated)
   uint8_t *mergedCounterData = nullptr;          // Mutable copy of counter data
 
-  // Get the ID count from an input file by reading its .sig_ptr_header_counter section
+  // Get the ID count from an input file by reading its .sig_header section
   uint32_t getFileIDCount(InputSectionBase *counterSec);
 
   // Merge counter from a subsequent file into the merged counter
@@ -83,9 +83,11 @@ uint32_t SigModeRelocator::getFileIDCount(InputSectionBase *counterSec) {
     return 0;
   
   ArrayRef<uint8_t> data = counterSec->content();
-  uint32_t count = read32le(data.data());
+  // Counter is now 64-bit, read as uint64_t and cast to uint32_t
+  // (ID count should fit in 32 bits)
+  uint64_t count = read64le(data.data());
   
-  return count;
+  return static_cast<uint32_t>(count);
 }
 
 void SigModeRelocator::relocateID32(uint8_t *ptr, uint32_t idOffset) {
@@ -162,34 +164,35 @@ void SigModeRelocator::relocateIDArray(MutableArrayRef<uint8_t> data,
   }
 }
 
-void SigModeRelocator::mergeCounter(InputSectionBase *counterSec) {
-  // Counter section has 6 uint64_t counters (48 bytes total)
-  // Counter section layout:
-  // - 6 x uint32_t counters (24 bytes)
-  // - 1 x uint32_t reserved entry (4 bytes) - for GOT ID count, do NOT merge
-  // Total: 28 bytes per file
-  constexpr size_t counterCount = 6;
-  constexpr size_t counterSize = sizeof(uint32_t);
-  constexpr size_t countersSize = counterCount * counterSize;  // 24 bytes
-  constexpr size_t reservedSize = sizeof(uint32_t);            // 4 bytes
-  constexpr size_t totalSize = countersSize + reservedSize;    // 28 bytes
-  
-  if (!counterSec || !mergedCounterData)
+void SigModeRelocator::mergeCounter(InputSectionBase *headerSec) {
+  // .sig_header section layout:
+  // - 6 x uint64_t counters (48 bytes) - these are merged (summed)
+  // - 1 x uint64_t reserved entry (8 bytes) - for GOT ID count, do NOT merge
+  // - 10 x int64_t segment offsets (80 bytes) - initialized to 0, filled by linker later
+  // - 1 x int64_t .got section offset (8 bytes)
+  // - 1 x uint64_t .got entry count (8 bytes)
+  // Total: 152 bytes per file
+  //
+  // We only merge the first 6 counters. The 7th counter and segment addresses
+  // are handled separately.
+  if (!headerSec || !mergedCounterData)
     return;
-  
-  ArrayRef<uint8_t> srcData = counterSec->content();
-  if (srcData.size() < totalSize)
+
+  ArrayRef<uint8_t> srcData = headerSec->content();
+  if (srcData.size() < sigHeaderTotalSize)
     return;
-  
+
   // Add each counter value (only the first 6, skip the reserved 7th entry)
-  for (size_t i = 0; i < counterCount; ++i) {
-    size_t offset = i * counterSize;
-    uint32_t srcVal = read32le(srcData.data() + offset);
-    uint32_t dstVal = read32le(mergedCounterData + offset);
-    write32le(mergedCounterData + offset, srcVal + dstVal);
+  for (size_t i = 0; i < sigHeaderCounterCount; ++i) {
+    size_t offset = i * sizeof(uint64_t);
+    uint64_t srcVal = read64le(srcData.data() + offset);
+    uint64_t dstVal = read64le(mergedCounterData + offset);
+    write64le(mergedCounterData + offset, srcVal + dstVal);
   }
   // Note: The 7th entry (reserved for GOT ID count) is NOT merged
   // It will be written by convertSigGotInPlace after GOT processing
+  // Note: The 10 segment addresses are initialized to 0 in merged data
+  // They will be filled by fillSigHeaderSegmentAddresses after address finalization
   
   LLVM_DEBUG(dbgs() << "SigMode: Merged counter from file\n");
 }
@@ -267,7 +270,7 @@ void SigModeRelocator::process() {
     // Find the counter section to get this file's ID count
     InputSectionBase *counterSec = nullptr;
     for (InputSectionBase *sec : sections) {
-      if (sec->name == sigSectionCounter) {
+      if (sec->name == sigSectionHeader) {
         counterSec = sec;
         break;
       }
@@ -302,7 +305,7 @@ void SigModeRelocator::process() {
     // Always allocate buffers even when accumulatedIDCount == 0, because external reference
     // resolution (resolveExternalGotReferences) will need to modify these buffers later
     for (InputSectionBase *sec : sections) {
-      if (sec->name != sigSectionCounter)
+      if (sec->name != sigSectionHeader)
         relocateIDs<ELFT>(sec, accumulatedIDCount);
     }
     
@@ -608,7 +611,7 @@ void SigGotConverter<ELFT>::updateCounterSection() {
   // Find the merged counter section
   OutputSection *sigCounterOS = nullptr;
   for (OutputSection *os : ctx.outputSections) {
-    if (os->name == sigSectionCounter) {
+    if (os->name == sigSectionHeader) {
       sigCounterOS = os;
       break;
     }
@@ -634,12 +637,12 @@ void SigGotConverter<ELFT>::updateCounterSection() {
   assert(counterSec && "Merged counter section must exist");
 
   constexpr size_t counterCount = 6;
-  constexpr size_t counterSize = sizeof(uint32_t);
-  constexpr size_t countersSize = counterCount * counterSize;  // 24 bytes
+  constexpr size_t counterSize = sizeof(uint64_t);
+  constexpr size_t countersSize = counterCount * counterSize;  // 48 bytes
   
-  // Update the GOT ID count
+  // Update the GOT ID count (7th counter, at offset 48)
   uint8_t *data = const_cast<uint8_t *>(counterSec->content().data());
-  write32le(data + countersSize, static_cast<uint32_t>(totalGotIDCount));
+  write64le(data + countersSize, totalGotIDCount);
   
   LLVM_DEBUG(dbgs() << "SigMode: Updated GOT ID count to " 
                     << totalGotIDCount << " in counter section\n");
@@ -1056,3 +1059,143 @@ template void lld::elf::resolveExternalGotReferences<llvm::object::ELF32LE>(Ctx 
 template void lld::elf::resolveExternalGotReferences<llvm::object::ELF32BE>(Ctx &);
 template void lld::elf::resolveExternalGotReferences<llvm::object::ELF64LE>(Ctx &);
 template void lld::elf::resolveExternalGotReferences<llvm::object::ELF64BE>(Ctx &);
+
+// Fill in segment offsets in the .sig_header section
+// This writes the relative offsets of 10 SigMode sections (relative to .sig_header)
+// into the segment address area of .sig_header (after the 7 counter values).
+// Also writes .got section offset and entry count.
+//
+// Using relative offsets instead of absolute addresses means:
+// 1. No PIE relocation is needed
+// 2. The loader can calculate actual addresses by: sig_header_addr + offset
+// 3. If a section doesn't exist, the offset is set to 0
+//
+// The offset can be negative (if section is before .sig_header) or positive.
+// We store it as a signed 64-bit value.
+//
+// This function also sets the SHF_RISCV_SIG_HEADER flag on the .sig_header
+// output section, allowing the loader to quickly identify it without string
+// comparison.
+template <class ELFT>
+void lld::elf::fillSigHeaderSegmentAddresses(Ctx &ctx) {
+  // Find the .sig_header output section
+  OutputSection *sigHeaderOS = nullptr;
+  for (OutputSection *os : ctx.outputSections) {
+    if (os->name == sigSectionHeader) {
+      sigHeaderOS = os;
+      break;
+    }
+  }
+  
+  if (!sigHeaderOS) {
+    LLVM_DEBUG(dbgs() << "SigMode: No .sig_header section found, skipping segment offset fill\n");
+    return;
+  }
+  
+  // Set the SHF_RISCV_SIG_HEADER flag for quick identification by loader
+  sigHeaderOS->flags |= SHF_RISCV_SIG_HEADER;
+  LLVM_DEBUG(dbgs() << "SigMode: Set SHF_RISCV_SIG_HEADER flag on .sig_header\n");
+  
+  // Get the merged .sig_header InputSection
+  SmallVector<InputSection *, 0> storage;
+  ArrayRef<InputSection *> sections = getInputSections(*sigHeaderOS, storage);
+  
+  if (sections.empty())
+    return;
+  
+  InputSection *headerSec = nullptr;
+  for (InputSection *sec : sections) {
+    if (sec->size != 0) {
+      headerSec = sec;
+      break;
+    }
+  }
+  
+  if (!headerSec) {
+    LLVM_DEBUG(dbgs() << "SigMode: No non-empty .sig_header input section found\n");
+    return;
+  }
+  
+  // Ensure the section is large enough to hold segment offsets
+  if (headerSec->content().size() < sigHeaderTotalSize) {
+    LLVM_DEBUG(dbgs() << "SigMode: .sig_header section too small: " 
+                      << headerSec->content().size() << " < " << sigHeaderTotalSize << "\n");
+    return;
+  }
+  
+  // Get the base address of .sig_header for calculating relative offsets
+  uint64_t sigHeaderAddr = sigHeaderOS->addr;
+  
+  // Build a map of section names to their output sections
+  DenseMap<StringRef, OutputSection *> sectionMap;
+  for (OutputSection *os : ctx.outputSections) {
+    sectionMap[os->name] = os;
+  }
+  
+  // Define the order of sections for segment offsets
+  // This must match the order defined in RISCVCollectGlobalPointers.cpp
+  static const char *segmentSectionNames[sigHeaderSegAddrCount] = {
+    sigSectionHeaderSingle,      // [0]
+    sigSectionHeaderContigSame,  // [1]
+    sigSectionHeaderContigDiff,  // [2]
+    sigSectionHeaderSparseSame,  // [3]
+    sigSectionHeaderSparseDiff,  // [4]
+    sigSectionOffsetSparseSame,  // [5]
+    sigSectionOffsetSparseDiff,  // [6]
+    sigSectionIDContigDiff,      // [7]
+    sigSectionIDSparseDiff,      // [8]
+    sigSectionGOT                // [9]
+  };
+  
+  // Get mutable pointer to the segment offset area
+  uint8_t *data = const_cast<uint8_t *>(headerSec->content().data());
+  uint8_t *segOffsets = data + sigHeaderSegAddrsOffset;
+  
+  // Fill in each segment offset (relative to .sig_header)
+  for (size_t i = 0; i < sigHeaderSegAddrCount; ++i) {
+    int64_t offset = 0;  // 0 means section doesn't exist
+    auto it = sectionMap.find(segmentSectionNames[i]);
+    if (it != sectionMap.end() && it->second && it->second->addr != 0) {
+      // Calculate relative offset: target_section_addr - sig_header_addr
+      offset = static_cast<int64_t>(it->second->addr) - static_cast<int64_t>(sigHeaderAddr);
+    }
+    
+    // Store as signed 64-bit value
+    write64le(segOffsets + i * sizeof(int64_t), static_cast<uint64_t>(offset));
+    
+    LLVM_DEBUG(dbgs() << "SigMode: SegmentOffset[" << i << "] " << segmentSectionNames[i]
+                      << " = " << offset << " (0x" << Twine::utohexstr(offset) << ")\n");
+  }
+  
+  // Fill in .got section offset and entry count
+  int64_t gotOffset = 0;
+  uint64_t gotEntryCount = 0;
+  
+  // Find the .got output section
+  auto gotIt = sectionMap.find(".got");
+  if (gotIt != sectionMap.end() && gotIt->second && gotIt->second->addr != 0) {
+    OutputSection *gotOS = gotIt->second;
+    gotOffset = static_cast<int64_t>(gotOS->addr) - static_cast<int64_t>(sigHeaderAddr);
+    // Calculate number of entries: size / pointer_size
+    size_t ptrSize = ELFT::Is64Bits ? 8 : 4;
+    gotEntryCount = gotOS->size / ptrSize;
+  }
+  
+  // Write .got offset at sigHeaderGotOffsetOffset
+  write64le(data + sigHeaderGotOffsetOffset, static_cast<uint64_t>(gotOffset));
+  // Write .got entry count at sigHeaderGotCountOffset
+  write64le(data + sigHeaderGotCountOffset, gotEntryCount);
+  
+  LLVM_DEBUG(dbgs() << "SigMode: .got offset = " << gotOffset 
+                    << ", entry count = " << gotEntryCount << "\n");
+  
+  LLVM_DEBUG(dbgs() << "SigMode: Filled " << sigHeaderSegAddrCount 
+                    << " segment offsets + .got info in .sig_header (base=0x" 
+                    << Twine::utohexstr(sigHeaderAddr) << ")\n");
+}
+
+// Explicit template instantiations for fillSigHeaderSegmentAddresses
+template void lld::elf::fillSigHeaderSegmentAddresses<llvm::object::ELF32LE>(Ctx &);
+template void lld::elf::fillSigHeaderSegmentAddresses<llvm::object::ELF32BE>(Ctx &);
+template void lld::elf::fillSigHeaderSegmentAddresses<llvm::object::ELF64LE>(Ctx &);
+template void lld::elf::fillSigHeaderSegmentAddresses<llvm::object::ELF64BE>(Ctx &);

@@ -2179,6 +2179,8 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   if (ctx.arg.emachine == EM_RISCV) {
     llvm::TimeTraceScope timeScope("Convert SigMode GOT");
     convertSigGotInPlace<ELFT>(ctx);
+    // Fill segment addresses in .sig_header after all section addresses are finalized
+    fillSigHeaderSegmentAddresses<ELFT>(ctx);
   }
 
   // All information needed for OutputSection part of Map file is available.

@@ -160,8 +160,8 @@ public:
   // GOT section
   static constexpr const char *SectionGOT = ".sig_got";
   
-  // Counter section (all counts go here)
-  static constexpr const char *SectionCounter = ".sig_ptr_header_counter";
+  // Header section (counters + segment addresses)
+  static constexpr const char *SectionHeader = ".sig_header";
   
   // Header sections (5 types)
   static constexpr const char *SectionHeaderSingle = ".sig_ptr_header_single";
@@ -254,6 +254,10 @@ private:
   
   // Generate external fixup sections
   void generateExtFixupSections(Module &M, const DataLayout &DL);
+  
+  // Generate 10 segment addresses (64-bit each) in .sig_header section
+  // These addresses are initialized to 0 and will be filled by the linker
+  void generateSegmentAddresses(Module &M, const DataLayout &DL);
 };
 
 } // end anonymous namespace
@@ -733,20 +737,23 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     GOTTableGV->setSection(SectionGOT);
     GOTTableGV->setAlignment(Align(PtrSize));
 
-    // Count placed in .sig_ptr_header_counter section (all counts in one section)
+    // Count placed in .sig_header section (all counts in one section)
+    // Using 64-bit counter for larger capacity
     GlobalVariable *GOTSizeGV = new GlobalVariable(
-        M, I32Ty, /*isConstant=*/true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, GOTTableEntries.size()),
+        M, I64Ty, /*isConstant=*/true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, GOTTableEntries.size()),
         "");
-    GOTSizeGV->setSection(SectionCounter);
+    GOTSizeGV->setSection(SectionHeader);
   } else {
+    // Generate 7 zero counters (64-bit each)
     for (int i = 0; i < 7; i++) {
       GlobalVariable *GOTSizeGV = new GlobalVariable(
-          M, I32Ty, /*isConstant=*/true, GlobalValue::PrivateLinkage,
-          ConstantInt::get(I32Ty, 0),
+          M, I64Ty, /*isConstant=*/true, GlobalValue::PrivateLinkage,
+          ConstantInt::get(I64Ty, 0),
           "");
-      GOTSizeGV->setSection(SectionCounter);
+      GOTSizeGV->setSection(SectionHeader);
     }
+    generateSegmentAddresses(M, DL);
     return;
   }
 
@@ -983,13 +990,13 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     GV->setSection(SectionHeaderSingle);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, SingleHeaders.size()), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, SingleHeaders.size()), "");
+    CountGV->setSection(SectionHeader);
   } else {
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, 0), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, 0), "");
+    CountGV->setSection(SectionHeader);
   }
   
   // === Header Section 2: Type2 ContiguousSame ===
@@ -1001,13 +1008,13 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     GV->setSection(SectionHeaderContigSame);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, ContiguousSameHeaders.size()), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, ContiguousSameHeaders.size()), "");
+    CountGV->setSection(SectionHeader);
   } else {
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, 0), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, 0), "");
+    CountGV->setSection(SectionHeader);
   }
   
   // === Header Section 3: Type1 ContiguousDifferent ===
@@ -1019,13 +1026,13 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     GV->setSection(SectionHeaderContigDiff);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, ContiguousDiffHeaders.size()), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, ContiguousDiffHeaders.size()), "");
+    CountGV->setSection(SectionHeader);
   } else {
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, 0), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, 0), "");
+    CountGV->setSection(SectionHeader);
   }
   
   // === Header Section 4: Type4 SparseSame ===
@@ -1037,13 +1044,13 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     GV->setSection(SectionHeaderSparseSame);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, SparseSameHeaders.size()), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, SparseSameHeaders.size()), "");
+    CountGV->setSection(SectionHeader);
   } else {
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, 0), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, 0), "");
+    CountGV->setSection(SectionHeader);
   }
   
   // === Header Section 5: Type3 SparseDifferent ===
@@ -1055,13 +1062,13 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
     GV->setSection(SectionHeaderSparseDiff);
     GV->setAlignment(Align(PtrSize));
     
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, SparseDiffHeaders.size()), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, SparseDiffHeaders.size()), "");
+    CountGV->setSection(SectionHeader);
   } else {
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, 0), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, 0), "");
+    CountGV->setSection(SectionHeader);
   }
   
   // === Data Array Section 1: ContiguousDiff IDs (DataID + PointToID[] combined, 32-bit each) ===
@@ -1119,6 +1126,7 @@ void RISCVCollectGlobalPointers::generatePointerTable(Module &M,
 
   // Generate external fixup sections if there are any external references
   generateExtFixupSections(M, DL);
+  generateSegmentAddresses(M, DL);
 }
 
 // Generate external fixup sections for external symbol references
@@ -1127,13 +1135,14 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
   LLVMContext &Ctx = M.getContext();
   unsigned PtrSize = DL.getPointerSize();
   IntegerType *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
-  IntegerType *I32Ty = Type::getInt32Ty(Ctx);
+  IntegerType *I64Ty = Type::getInt64Ty(Ctx);
 
   if (ExtFixupMap.empty() && ExtGOTMap.empty()) {
     LLVM_DEBUG(dbgs() << "No external references, skipping ext fixup sections\n");
-    GlobalVariable *CountGV = new GlobalVariable(M, I32Ty, true, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I32Ty, 0), "");
-    CountGV->setSection(SectionCounter);
+    GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64Ty, 0), "");
+    CountGV->setSection(SectionHeader);
+    // Generate 10 zero segment addresses after the 7th counter
     return;
   }
 
@@ -1191,16 +1200,16 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
       HeaderGV->setSection(SectionExtFixupHeader);
       HeaderGV->setAlignment(Align(PtrSize));
       
-      // Count for fixup headers
-      GlobalVariable *FixupCountGV = new GlobalVariable(M, I32Ty, true, 
+      // Count for fixup headers (64-bit counter)
+      GlobalVariable *FixupCountGV = new GlobalVariable(M, I64Ty, true, 
           GlobalValue::PrivateLinkage,
-          ConstantInt::get(I32Ty, FixupHeaders.size()), "");
-      FixupCountGV->setSection(SectionCounter);
+          ConstantInt::get(I64Ty, FixupHeaders.size()), "");
+      FixupCountGV->setSection(SectionHeader);
     } else {
-      GlobalVariable *FixupCountGV = new GlobalVariable(M, I32Ty, true, 
+      GlobalVariable *FixupCountGV = new GlobalVariable(M, I64Ty, true, 
           GlobalValue::PrivateLinkage,
-          ConstantInt::get(I32Ty, 0), "");
-      FixupCountGV->setSection(SectionCounter);
+          ConstantInt::get(I64Ty, 0), "");
+      FixupCountGV->setSection(SectionHeader);
     }
     
     // Generate fixup data section
@@ -1217,6 +1226,43 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
                       << "  Fixup Headers: " << FixupHeaders.size() << "\n"
                       << "  Fixup Data Entries: " << FixupDataEntries.size() << "\n");
   }
+}
+
+// Generate 10 segment addresses (64-bit each) in .sig_header section
+// These addresses are initialized to 0 and will be filled by the linker
+// with actual section virtual addresses after address allocation.
+//
+// Layout (after 7 x uint64_t counters = 56 bytes):
+// [0] .sig_ptr_header_single
+// [1] .sig_ptr_header_contig_same
+// [2] .sig_ptr_header_contig_diff
+// [3] .sig_ptr_header_sparse_same
+// [4] .sig_ptr_header_sparse_diff
+// [5] .sig_offset_sparse_same
+// [6] .sig_offset_sparse_diff
+// [7] .sig_id_contig_diff
+// [8] .sig_id_sparse_diff
+// [9] .sig_got
+// [10] .got offset (relative to .sig_header)
+// [11] .got entry count
+//
+// The linker will fill these with relative offsets (relative to .sig_header).
+// The loader can compute actual addresses as: sig_header_addr + offset
+void RISCVCollectGlobalPointers::generateSegmentAddresses(Module &M, const DataLayout &DL) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I64Ty = Type::getInt64Ty(Ctx);
+
+  // Generate 10 segment offset placeholders (initialized to 0)
+  // The linker will fill these with relative offsets
+  for (int i = 0; i < 10 + 1 + 1; i++) {
+    GlobalVariable *GOTSizeGV = new GlobalVariable(
+          M, I64Ty, /*isConstant=*/true, GlobalValue::PrivateLinkage,
+          ConstantInt::get(I64Ty, 0),
+          "");
+    GOTSizeGV->setSection(SectionHeader);
+  }
+  
+  LLVM_DEBUG(dbgs() << "Generated 10 segment offset placeholders + .got offset/count in .sig_header\n");
 }
 
 bool RISCVCollectGlobalPointers::runOnModule(Module &M) {
