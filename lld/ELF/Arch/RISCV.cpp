@@ -177,6 +177,11 @@ uint32_t RISCV::calcEFlags() const {
     if (eflags & EF_RISCV_RVC)
       target |= EF_RISCV_RVC;
 
+    // SigMode flag should be OR'd: if any object file has SigMode enabled,
+    // the output should have it enabled too
+    if (eflags & EF_RISCV_SIG_MODE)
+      target |= EF_RISCV_SIG_MODE;
+
     if ((eflags & EF_RISCV_FLOAT_ABI) != (target & EF_RISCV_FLOAT_ABI))
       Err(ctx) << f
                << ": cannot link object files with different "
