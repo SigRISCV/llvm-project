@@ -1344,7 +1344,13 @@ enum : unsigned {
   SHF_ARM_PURECODE = 0x20000000,
 
   // Section contains only program instructions and no program data.
-  SHF_AARCH64_PURECODE = 0x20000000
+  SHF_AARCH64_PURECODE = 0x20000000,
+
+  // RISC-V SigMode header section flag.
+  // This section is the .sig_header section which contains metadata for
+  // the SigMode pointer encryption system. Loader can use this flag to
+  // quickly identify the sig_header section instead of string comparison.
+  SHF_RISCV_SIG_HEADER = 0x10000000
 };
 
 // Section Group Flags
