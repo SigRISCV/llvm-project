@@ -3468,7 +3468,7 @@ static uint64_t getOrCreateSigTypeId(llvm::Module &M, llvm::LLVMContext &Ctx,
 /// which is stable across optimization passes.
 llvm::CallInst* CodeGenFunction::EmitSigMemcpyCall(Address Dest, Address Src,
                               QualType Ty, uint64_t NumElements) {
-  assert(!getContext().getTargetInfo().isSigModeSupported());
+  assert(getContext().getTargetInfo().isSigModeSupported());
   llvm::LLVMContext &VMContext = getLLVMContext();
   llvm::Module &M = CGM.getModule();
   
@@ -3545,7 +3545,7 @@ bool CodeGenFunction::ShouldUseSigMemset(Address DestPtr, QualType Ty) {
 /// store xsig_setdummyid(null) instead of plain zero.
 llvm::CallInst* CodeGenFunction::EmitSigMemsetCall(Address Dest,
                               QualType Ty, uint64_t NumElements) {
-  assert(!getContext().getTargetInfo().isSigModeSupported());
+  assert(getContext().getTargetInfo().isSigModeSupported());
   llvm::LLVMContext &VMContext = getLLVMContext();
   llvm::Module &M = CGM.getModule();
   
