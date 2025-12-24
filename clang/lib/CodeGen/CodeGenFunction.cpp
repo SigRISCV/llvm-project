@@ -3425,7 +3425,47 @@ bool CodeGenFunction::ShouldUseSigMemcpy(Address DestPtr, Address SrcPtr, QualTy
   return true;
 }
 
-/// Emit a call to @llvm.riscv.xsig.memcpy with type metadata.
+/// Get or create a type ID for sigmemcpy/sigmemset type registry.
+/// The type info is stored in module-level named metadata.
+/// Returns the ID that can be used to look up the type later.
+static uint64_t getOrCreateSigTypeId(llvm::Module &M, llvm::LLVMContext &Ctx,
+                                     llvm::Type *ElemTy, StringRef MetadataName) {
+  // Get or create the named metadata node
+  llvm::NamedMDNode *TypeRegistry = M.getOrInsertNamedMetadata(MetadataName);
+  
+  // Check if this type already has an ID
+  for (unsigned i = 0; i < TypeRegistry->getNumOperands(); ++i) {
+    llvm::MDNode *Entry = TypeRegistry->getOperand(i);
+    if (Entry->getNumOperands() >= 2) {
+      // Entry format: !{i64 ID, %Type undef}
+      if (auto *TypeMD = dyn_cast<llvm::ValueAsMetadata>(Entry->getOperand(1))) {
+        if (TypeMD->getType() == ElemTy) {
+          // Found existing entry, return its ID
+          if (auto *IdMD = dyn_cast<llvm::ConstantAsMetadata>(Entry->getOperand(0))) {
+            if (auto *IdConst = dyn_cast<llvm::ConstantInt>(IdMD->getValue())) {
+              return IdConst->getZExtValue();
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Create new entry with new ID
+  uint64_t NewId = TypeRegistry->getNumOperands();
+  llvm::Metadata *IdMD = llvm::ConstantAsMetadata::get(
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(Ctx), NewId));
+  llvm::Metadata *TypeMD = llvm::ValueAsMetadata::get(
+      llvm::UndefValue::get(ElemTy));
+  llvm::MDNode *Entry = llvm::MDNode::get(Ctx, {IdMD, TypeMD});
+  TypeRegistry->addOperand(Entry);
+  
+  return NewId;
+}
+
+/// Emit a call to @llvm.riscv.xsig.memcpy with type ID parameter.
+/// Type information is stored in module-level named metadata "sigmemcpy.types"
+/// which is stable across optimization passes.
 llvm::CallInst* CodeGenFunction::EmitSigMemcpyCall(Address Dest, Address Src,
                               QualType Ty, uint64_t NumElements) {
   llvm::LLVMContext &VMContext = getLLVMContext();
@@ -3433,6 +3473,9 @@ llvm::CallInst* CodeGenFunction::EmitSigMemcpyCall(Address Dest, Address Src,
   
   // Get the LLVM type for the element
   llvm::Type *ElemTy = ConvertTypeForMem(Ty);
+  
+  // Get or create type ID in named metadata registry
+  uint64_t TypeId = getOrCreateSigTypeId(M, VMContext, ElemTy, "sigmemcpy.types");
   
   // Get pointer types
   llvm::Type *DestPtrTy = Dest.getType();
@@ -3445,18 +3488,13 @@ llvm::CallInst* CodeGenFunction::EmitSigMemcpyCall(Address Dest, Address Src,
   llvm::Function *Fn = llvm::Intrinsic::getOrInsertDeclaration(
       &M, IID, {DestPtrTy, SrcPtrTy});
   
-  // Create the call
+  // Create the call with type ID as the last parameter
   llvm::CallInst *Call = Builder.CreateCall(Fn, {
       Dest.emitRawPointer(*this),
       Src.emitRawPointer(*this),
-      llvm::ConstantInt::get(Int64Ty, NumElements)
+      llvm::ConstantInt::get(Int64Ty, NumElements),
+      llvm::ConstantInt::get(Int64Ty, TypeId)
   });
-  
-  // Attach !sigmemcpy.type metadata: !{%Type undef}
-  llvm::Metadata *TypeMD = llvm::ValueAsMetadata::get(
-      llvm::UndefValue::get(ElemTy));
-  llvm::MDNode *MDN = llvm::MDNode::get(VMContext, {TypeMD});
-  Call->setMetadata("sigmemcpy.type", MDN);
 
   return Call;
 }
@@ -3499,7 +3537,9 @@ bool CodeGenFunction::ShouldUseSigMemset(Address DestPtr, QualType Ty) {
   return true;
 }
 
-/// Emit a call to @llvm.riscv.xsig.memset with type metadata.
+/// Emit a call to @llvm.riscv.xsig.memset with type ID parameter.
+/// Type information is stored in module-level named metadata "sigmemset.types"
+/// which is stable across optimization passes.
 /// This will zero-initialize the struct, but for pointer fields it will
 /// store xsig_setdummyid(null) instead of plain zero.
 llvm::CallInst* CodeGenFunction::EmitSigMemsetCall(Address Dest,
@@ -3509,6 +3549,9 @@ llvm::CallInst* CodeGenFunction::EmitSigMemsetCall(Address Dest,
   
   // Get the LLVM type for the element
   llvm::Type *ElemTy = ConvertTypeForMem(Ty);
+  
+  // Get or create type ID in named metadata registry
+  uint64_t TypeId = getOrCreateSigTypeId(M, VMContext, ElemTy, "sigmemset.types");
   
   // Get pointer type
   llvm::Type *DestPtrTy = Dest.getType();
@@ -3520,17 +3563,12 @@ llvm::CallInst* CodeGenFunction::EmitSigMemsetCall(Address Dest,
   llvm::Function *Fn = llvm::Intrinsic::getOrInsertDeclaration(
       &M, IID, {DestPtrTy});
   
-  // Create the call
+  // Create the call with type ID as the last parameter
   llvm::CallInst *Call = Builder.CreateCall(Fn, {
       Dest.emitRawPointer(*this),
-      llvm::ConstantInt::get(Int64Ty, NumElements)
+      llvm::ConstantInt::get(Int64Ty, NumElements),
+      llvm::ConstantInt::get(Int64Ty, TypeId)
   });
-  
-  // Attach !sigmemset.type metadata: !{%Type undef}
-  llvm::Metadata *TypeMD = llvm::ValueAsMetadata::get(
-      llvm::UndefValue::get(ElemTy));
-  llvm::MDNode *MDN = llvm::MDNode::get(VMContext, {TypeMD});
-  Call->setMetadata("sigmemset.type", MDN);
 
   return Call;
 }

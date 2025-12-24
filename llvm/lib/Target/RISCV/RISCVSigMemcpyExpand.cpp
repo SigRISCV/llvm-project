@@ -412,10 +412,40 @@ void RISCVSigMemcpyExpand::copyElementInFunc(IRBuilder<> &Builder,
   }
 }
 
+/// Look up type from module-level named metadata by type ID.
+/// The named metadata format: !sigmemcpy.types = !{!0, !1, ...}
+///   !0 = !{i64 0, %struct.Type undef}
+/// Returns nullptr if not found.
+static Type *getTypeFromNamedMetadata(Module *M, StringRef MetadataName, 
+                                       uint64_t TypeId) {
+  NamedMDNode *TypeRegistry = M->getNamedMetadata(MetadataName);
+  if (!TypeRegistry)
+    return nullptr;
+  
+  for (unsigned i = 0; i < TypeRegistry->getNumOperands(); ++i) {
+    MDNode *Entry = TypeRegistry->getOperand(i);
+    if (Entry->getNumOperands() >= 2) {
+      // Entry format: !{i64 ID, %Type undef}
+      if (auto *IdMD = dyn_cast<ConstantAsMetadata>(Entry->getOperand(0))) {
+        if (auto *IdConst = dyn_cast<ConstantInt>(IdMD->getValue())) {
+          if (IdConst->getZExtValue() == TypeId) {
+            // Found the entry with matching ID
+            if (auto *TypeMD = dyn_cast<ValueAsMetadata>(Entry->getOperand(1))) {
+              return TypeMD->getType();
+            }
+          }
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
 bool RISCVSigMemcpyExpand::expandSigMemcpy(IntrinsicInst *II) {
   Value *Dest = II->getArgOperand(0);
   Value *Src = II->getArgOperand(1);
-  Value *LenVal = II->getArgOperand(2);  // Now index 2 (was 3)
+  Value *LenVal = II->getArgOperand(2);
+  Value *TypeIdVal = II->getArgOperand(3);  // New: type ID parameter
   
   // Get address spaces
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
@@ -424,20 +454,15 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(IntrinsicInst *II) {
   LLVM_DEBUG(dbgs() << "Expanding sigmemcpy: dest AS=" << DestAS 
                     << ", src AS=" << SrcAS << "\n");
   
-  // Get the element type from instruction-level metadata
-  // Expected format: !sigmemcpy.type !N where !N = !{%struct.Type undef}
-  MDNode *TypeMD = II->getMetadata("sigmemcpy.type");
-  assert(TypeMD && TypeMD->getNumOperands() > 0 &&
-         "llvm.riscv.xsig.memcpy requires !sigmemcpy.type metadata");
+  // Get the element type from module-level named metadata using type ID
+  auto *TypeIdConst = dyn_cast<ConstantInt>(TypeIdVal);
+  assert(TypeIdConst && "llvm.riscv.xsig.memcpy type_id must be constant");
+  uint64_t TypeId = TypeIdConst->getZExtValue();
   
-  // Extract type from metadata: !{%struct.Type undef}
-  auto *TypeValue = dyn_cast<ValueAsMetadata>(TypeMD->getOperand(0));
-  assert(TypeValue && "Invalid !sigmemcpy.type metadata format");
+  Type *ElemTy = getTypeFromNamedMetadata(Mod, "sigmemcpy.types", TypeId);
+  assert(ElemTy && "Could not find type in !sigmemcpy.types metadata");
   
-  Type *ElemTy = TypeValue->getType();
-  assert(ElemTy && "Could not extract type from !sigmemcpy.type metadata");
-  
-  LLVM_DEBUG(dbgs() << "  Element type: " << *ElemTy << "\n");
+  LLVM_DEBUG(dbgs() << "  Element type (ID=" << TypeId << "): " << *ElemTy << "\n");
   
   IRBuilder<> Builder(II);
   
@@ -666,26 +691,22 @@ void RISCVSigMemcpyExpand::zeroElementInFunc(IRBuilder<> &Builder,
 bool RISCVSigMemcpyExpand::expandSigMemset(IntrinsicInst *II) {
   Value *Dest = II->getArgOperand(0);
   Value *LenVal = II->getArgOperand(1);
+  Value *TypeIdVal = II->getArgOperand(2);  // New: type ID parameter
   
   // Get address space
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
   
   LLVM_DEBUG(dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n");
   
-  // Get the element type from instruction-level metadata
-  // Expected format: !sigmemset.type !N where !N = !{%struct.Type undef}
-  MDNode *TypeMD = II->getMetadata("sigmemset.type");
-  assert(TypeMD && TypeMD->getNumOperands() > 0 &&
-         "llvm.riscv.xsig.memset requires !sigmemset.type metadata");
+  // Get the element type from module-level named metadata using type ID
+  auto *TypeIdConst = dyn_cast<ConstantInt>(TypeIdVal);
+  assert(TypeIdConst && "llvm.riscv.xsig.memset type_id must be constant");
+  uint64_t TypeId = TypeIdConst->getZExtValue();
   
-  // Extract type from metadata: !{%struct.Type undef}
-  auto *TypeValue = dyn_cast<ValueAsMetadata>(TypeMD->getOperand(0));
-  assert(TypeValue && "Invalid !sigmemset.type metadata format");
+  Type *ElemTy = getTypeFromNamedMetadata(Mod, "sigmemset.types", TypeId);
+  assert(ElemTy && "Could not find type in !sigmemset.types metadata");
   
-  Type *ElemTy = TypeValue->getType();
-  assert(ElemTy && "Could not extract type from !sigmemset.type metadata");
-  
-  LLVM_DEBUG(dbgs() << "  Element type: " << *ElemTy << "\n");
+  LLVM_DEBUG(dbgs() << "  Element type (ID=" << TypeId << "): " << *ElemTy << "\n");
   
   IRBuilder<> Builder(II);
   
