@@ -151,6 +151,14 @@ def err_cast_with_attr_without_pointer : Error<
 def warn_ignore_static_raw : Warning<
   "the __raw qualify of static variable %0 %1 will be ignored">;
 
+def warn_sigmemcpy_union_with_pointers : Warning<
+  "copying union %0 containing pointers in SigMode may not re-sign correctly; "
+  "consider manual handling">;
+
+def warn_sigmemset_union_with_pointers : Warning<
+  "set 0 union %0 containing pointers in SigMode may not re-sign correctly; "
+  "consider manual handling">;
+
 }
 
 let CategoryName = "Nullability Issue" in {

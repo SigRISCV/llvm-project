@@ -876,6 +876,21 @@ const CGFunctionInfo &CodeGenTypes::arrangeLLVMFunctionInfo(
     CGM.getABIInfo().computeInfo(*FI);
   }
 
+  // For SigMode raw functions, update IndirectAddrSpace for all Indirect
+  // arguments and return values to use the raw address space.
+  if (FI->isRaw()) {
+    unsigned RawAddrSpace = CGM.getDataLayout().getRawAllocAddrSpace();
+    ABIArgInfo &retInfo = FI->getReturnInfo();
+    if (retInfo.isIndirect() || retInfo.isIndirectAliased()) {
+      retInfo.setIndirectAddrSpace(RawAddrSpace);
+    }
+    for (auto &I : FI->arguments()) {
+      if (I.info.isIndirect() || I.info.isIndirectAliased()) {
+        I.info.setIndirectAddrSpace(RawAddrSpace);
+      }
+    }
+  }
+
   // Loop over all of the computed argument and return value info.  If any of
   // them are direct or extend without a specified coerce type, specify the
   // default now.
@@ -1777,12 +1792,15 @@ llvm::FunctionType *CodeGenTypes::GetFunctionType(const CGFunctionInfo &FI) {
       assert(NumIRArgs == 0);
       break;
 
-    case ABIArgInfo::Indirect:
+    case ABIArgInfo::Indirect: {
       assert(NumIRArgs == 1);
       // indirect arguments are always on the stack, which is alloca addr space.
+      // For raw functions, IndirectAddrSpace has been set to raw addr space
+      // in arrangeLLVMFunctionInfo.
       ArgTypes[FirstIRArg] = llvm::PointerType::get(
-          getLLVMContext(), CGM.getDataLayout().getAllocaAddrSpace());
+          getLLVMContext(), ArgInfo.getIndirectAddrSpace());
       break;
+    }
     case ABIArgInfo::IndirectAliased:
       assert(NumIRArgs == 1);
       ArgTypes[FirstIRArg] = llvm::PointerType::get(
@@ -4706,6 +4724,10 @@ void CodeGenFunction::EmitCallArgs(
       const auto *FPT = cast<const FunctionProtoType *>(Prototype.P);
       IsVariadic = FPT->isVariadic();
       ExplicitCC = FPT->getExtInfo().getCC();
+      // Set raw call flag for SigMode support so that struct temporaries
+      // can be allocated in raw address space
+      if (FPT->getExtInfo().getIsRaw())
+        Args.setIsRawCall(true);
       ArgTypes.assign(FPT->param_type_begin() + ParamsToSkip,
                       FPT->param_type_end());
     }
@@ -4911,9 +4933,10 @@ void CodeGenFunction::EmitCallArg(CallArgList &args, const Expr *E,
       type->castAsRecordDecl()->isParamDestroyedInCallee()) {
     // If we're using inalloca, use the argument memory.  Otherwise, use a
     // temporary.
+    QualType TempType = getContext().maybeAddRawQualifier(type, args.isRawCall());
     AggValueSlot Slot = args.isUsingInAlloca()
                             ? createPlaceholderSlot(*this, type)
-                            : CreateAggTemp(type, "agg.tmp");
+                            : CreateAggTemp(TempType, "agg.tmp");
 
     bool DestroyedInCallee = true, NeedsCleanup = true;
     if (const auto *RD = type->getAsCXXRecordDecl())
@@ -5309,6 +5332,7 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   Address SRetPtr = Address::invalid();
   bool NeedSRetLifetimeEnd = false;
   if (RetAI.isIndirect() || RetAI.isInAlloca() || RetAI.isCoerceAndExpand()) {
+    QualType RetTempTy = getContext().maybeAddRawQualifier(RetTy, CallInfo.isRaw());
     // For virtual function pointer thunks and musttail calls, we must always
     // forward an incoming SRet pointer to the callee, because a local alloca
     // would be de-allocated before the call. These cases both guarantee that
@@ -5316,11 +5340,11 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
     if ((IsVirtualFunctionPointerThunk || IsMustTail) && RetAI.isIndirect()) {
       SRetPtr = makeNaturalAddressForPointer(CurFn->arg_begin() +
                                                  IRFunctionArgs.getSRetArgNo(),
-                                             RetTy, CharUnits::fromQuantity(1));
+                                             RetTempTy, CharUnits::fromQuantity(1));
     } else if (!ReturnValue.isNull()) {
       SRetPtr = ReturnValue.getAddress();
     } else {
-      SRetPtr = CreateMemTempWithoutCast(RetTy, "tmp");
+      SRetPtr = CreateMemTemp(RetTempTy, "tmp");
       if (HaveInsertPoint() && ReturnValue.isUnused())
         NeedSRetLifetimeEnd = EmitLifetimeStart(SRetPtr.getBasePointer());
     }
@@ -5340,11 +5364,11 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
             SRetPtr.isKnownNonNull());
       }
       IRCallArgs[IRFunctionArgs.getSRetArgNo()] =
-          getAsNaturalPointerTo(SRetPtr, RetTy);
+          getAsNaturalPointerTo(SRetPtr, RetTempTy);
     } else if (RetAI.isInAlloca()) {
       Address Addr =
           Builder.CreateStructGEP(ArgMemory, RetAI.getInAllocaFieldIndex());
-      Builder.CreateStore(getAsNaturalPointerTo(SRetPtr, RetTy), Addr);
+      Builder.CreateStore(getAsNaturalPointerTo(SRetPtr, RetTempTy), Addr);
     }
   }
 
@@ -5398,7 +5422,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
           // For indirect things such as overaligned structs, replace the
           // placeholder with a regular aggregate temporary alloca. Store the
           // address of this alloca into the struct.
-          Addr = CreateMemTemp(info_it->type, "inalloca.indirect.tmp");
+          QualType TempTy = getContext().maybeAddRawQualifier(info_it->type, CallInfo.isRaw());
+          Addr = CreateMemTemp(TempTy, "inalloca.indirect.tmp");
           Address ArgSlot = Builder.CreateStructGEP(
               ArgMemory, ArgInfo.getInAllocaFieldIndex());
           Builder.CreateStore(Addr.getPointer(), ArgSlot);
@@ -5407,8 +5432,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
       } else if (ArgInfo.getInAllocaIndirect()) {
         // Make a temporary alloca and store the address of it into the argument
         // struct.
-        RawAddress Addr = CreateMemTempWithoutCast(
-            I->Ty, getContext().getTypeAlignInChars(I->Ty),
+        QualType TempTy = getContext().maybeAddRawQualifier(I->Ty, CallInfo.isRaw());
+        RawAddress Addr = CreateMemTemp(TempTy, getContext().getTypeAlignInChars(I->Ty),
             "indirect-arg-temp");
         I->copyInto(*this, Addr);
         Address ArgSlot =
@@ -5444,7 +5469,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
 
         assert((FirstIRArg >= IRFuncTy->getNumParams() ||
                 IRFuncTy->getParamType(FirstIRArg)->getPointerAddressSpace() ==
-                    TD->getAllocaAddrSpace()) &&
+                    TD->getAllocaAddrSpace() || IRFuncTy->getParamType(FirstIRArg)->getPointerAddressSpace() ==
+                    TD->getRawAllocAddrSpace()) &&
                "indirect argument must be in alloca address space");
 
         bool NeedCopy = false;
@@ -5499,8 +5525,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
 
       // For non-aggregate args and aggregate args meeting conditions above
       // we need to create an aligned temporary, and copy to it.
-      RawAddress AI = CreateMemTempWithoutCast(
-          I->Ty, ArgInfo.getIndirectAlign(), "byval-temp");
+      QualType TempTy = getContext().maybeAddRawQualifier(I->Ty, CallInfo.isRaw());
+      RawAddress AI = CreateMemTemp(TempTy, ArgInfo.getIndirectAlign(), "byval-temp");
       llvm::Value *Val = getAsNaturalPointerTo(AI, I->Ty);
       if (ArgHasMaybeUndefAttr)
         Val = Builder.CreateFreeze(Val);
@@ -5616,7 +5642,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
       // FIXME: Avoid the conversion through memory if possible.
       Address Src = Address::invalid();
       if (!I->isAggregate()) {
-        Src = CreateMemTemp(I->Ty, "coerce");
+        QualType TempTy = getContext().maybeAddRawQualifier(I->Ty, CallInfo.isRaw());
+        Src = CreateMemTemp(TempTy, "coerce");
         I->copyInto(*this, Src);
       } else {
         Src = I->hasLValue() ? I->getKnownLValue().getAddress()
@@ -5764,7 +5791,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
     case ABIArgInfo::TargetSpecific: {
       Address Src = Address::invalid();
       if (!I->isAggregate()) {
-        Src = CreateMemTemp(I->Ty, "target_coerce");
+        QualType TempTy = getContext().maybeAddRawQualifier(I->Ty, CallInfo.isRaw());
+        Src = CreateMemTemp(TempTy, "target_coerce");
         I->copyInto(*this, Src);
       } else {
         Src = I->hasLValue() ? I->getKnownLValue().getAddress()
@@ -6259,7 +6287,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
             getContext().getTypeInfoDataSizeInChars(RetTy).Width.getQuantity();
 
         if (!DestPtr.isValid()) {
-          DestPtr = CreateMemTemp(RetTy, "coerce");
+          QualType TempRetTy = getContext().maybeAddRawQualifier(RetTy, CallInfo.isRaw());
+          DestPtr = CreateMemTemp(TempRetTy, "coerce");
           DestIsVolatile = false;
           DestSize = getContext().getTypeSizeInChars(RetTy).getQuantity();
         }
@@ -6284,7 +6313,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
         Address StorePtr = emitAddressAtOffset(*this, DestPtr, RetAI);
         bool DestIsVolatile = ReturnValue.isVolatile();
         if (!DestPtr.isValid()) {
-          DestPtr = CreateMemTemp(RetTy, "target_coerce");
+          QualType TempRetTy = getContext().maybeAddRawQualifier(RetTy, CallInfo.isRaw());
+          DestPtr = CreateMemTemp(TempRetTy, "target_coerce");
           DestIsVolatile = false;
         }
         CGM.getABIInfo().createCoercedStore(CI, StorePtr, RetAI, DestIsVolatile,
@@ -6296,7 +6326,6 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
       case ABIArgInfo::IndirectAliased:
         llvm_unreachable("Invalid ABI kind for return argument");
       }
-
       llvm_unreachable("Unhandled ABIArgInfo::Kind");
     }();
   }

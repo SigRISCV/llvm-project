@@ -30,6 +30,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenACC.h"
 #include "clang/AST/DeclOpenMP.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/TargetInfo.h"
@@ -1163,7 +1164,7 @@ Address CodeGenModule::createUnnamedGlobalFrom(const VarDecl &D,
     bool isConstant = true;
     llvm::GlobalVariable *InsertBefore = nullptr;
     LangAS as = GetGlobalConstantAddressSpace();
-    if (D.getType().isRawQualified() && !D.getType().hasAddressSpace()) {
+    if (!D.getType().hasAddressSpace()) {
       as = LangAS::sigmode_raw;
     }
     unsigned AS =
@@ -1221,12 +1222,27 @@ void CodeGenFunction::emitStoresForConstant(const VarDecl &D, Address Loc,
   // If the initializer is all or mostly the same, codegen with bzero / memset
   // then do a few stores afterward.
   if (shouldUseBZeroPlusStoresToInitialize(constant, ConstantSize)) {
-    auto *I = Builder.CreateMemSet(Loc, llvm::ConstantInt::get(CGM.Int8Ty, 0),
-                                   SizeVal, isVolatile);
-    addInstToCurrentSourceAtom(I, nullptr);
+    // Check if we should use sigmemset instead of regular memset
+    // for structs containing pointers in sig address space
+    QualType VarTy = D.getType();
+    if (ShouldUseSigMemset(Loc, VarTy)) {
+      uint64_t num = 1;
+      if (const auto *AT = dyn_cast<ConstantArrayType>(VarTy.getTypePtr())) {
+        VarTy = AT->getElementType();
+        num = AT->getSize().getZExtValue();
+      }
+      auto *I = EmitSigMemsetCall(Loc, VarTy, num);
+      addInstToCurrentSourceAtom(I, nullptr);
+      if (IsAutoInit)
+        I->addAnnotationMetadata("auto-init");
+    } else {
+      auto *I = Builder.CreateMemSet(Loc, llvm::ConstantInt::get(CGM.Int8Ty, 0),
+                                     SizeVal, isVolatile);
+      addInstToCurrentSourceAtom(I, nullptr);
 
-    if (IsAutoInit)
-      I->addAnnotationMetadata("auto-init");
+      if (IsAutoInit)
+        I->addAnnotationMetadata("auto-init");
+    }
 
     bool valueAlreadyCorrect =
         constant->isNullValue() || isa<llvm::UndefValue>(constant);
@@ -1289,11 +1305,20 @@ void CodeGenFunction::emitStoresForConstant(const VarDecl &D, Address Loc,
   }
 
   // Copy from a global.
-  auto *I =
-      Builder.CreateMemCpy(Loc,
-                           createUnnamedGlobalForMemcpyFrom(
-                               CGM, D, Builder, constant, Loc.getAlignment()),
-                           SizeVal, isVolatile);
+  Address UnnamedGlobal = createUnnamedGlobalForMemcpyFrom(
+                              CGM, D, Builder, constant, Loc.getAlignment());
+  llvm::CallInst* I;
+  if (ShouldUseSigMemcpy(Loc, UnnamedGlobal, D.getType())) {
+    QualType Ty = D.getType();
+    uint64_t num = 1;
+    if (const auto *AT = dyn_cast<ConstantArrayType>(Ty.getTypePtr())) {
+      Ty = AT->getElementType();
+      num = AT->getSize().getZExtValue();
+    }
+    I = EmitSigMemcpyCall(Loc, UnnamedGlobal, Ty, num);
+  } else {
+    I = Builder.CreateMemCpy(Loc, UnnamedGlobal, SizeVal, isVolatile);
+  }
   addInstToCurrentSourceAtom(I, nullptr);
 
   if (IsAutoInit)

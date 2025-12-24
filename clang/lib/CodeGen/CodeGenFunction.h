@@ -3029,6 +3029,15 @@ public:
   void EmitAggregateCopy(LValue Dest, LValue Src, QualType EltTy,
                          AggValueSlot::Overlap_t MayOverlap,
                          bool isVolatile = false);
+  
+  // SigMode memcpy support
+  bool ShouldUseSigMemcpy(Address DestPtr, Address SrcPtr, QualType Ty);
+  llvm::CallInst* EmitSigMemcpyCall(Address Dest, Address Src,
+                              QualType Ty, uint64_t NumElements);
+
+  // SigMode memset support (for zero-initialization with pointer fields)
+  bool ShouldUseSigMemset(Address DestPtr, QualType Ty);
+  llvm::CallInst* EmitSigMemsetCall(Address Dest, QualType Ty, uint64_t NumElements);
 
   /// GetAddrOfLocalVar - Return the address of a local variable.
   Address GetAddrOfLocalVar(const VarDecl *VD) {

@@ -108,6 +108,7 @@ private:
   unsigned AllocaAddrSpace = 0;
   unsigned ProgramAddrSpace = 0;
   unsigned DefaultGlobalsAddrSpace = 0;
+  unsigned RawAllocAddrSpace = 100; // SigMode raw address space
 
   MaybeAlign StackNaturalAlign;
   MaybeAlign FunctionPtrAlign;
@@ -237,6 +238,7 @@ public:
   MaybeAlign getStackAlignment() const { return StackNaturalAlign; }
 
   unsigned getAllocaAddrSpace() const { return AllocaAddrSpace; }
+  unsigned getRawAllocAddrSpace() const { return RawAllocAddrSpace; }
 
   PointerType *getAllocaPtrType(LLVMContext &Ctx) const {
     return PointerType::get(Ctx, AllocaAddrSpace);

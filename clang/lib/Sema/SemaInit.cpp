@@ -3190,8 +3190,6 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
         InitializedEntity::InitializeMember(*Field, &Entity);
       QualType FieldType = Field->getType();
       if (Entity.getType().isRawQualified()) {
-        DEBUG_FILE << Entity.getType().getAsString() << "\n";
-        DEBUG_FILE << FieldType.getAsString() << "\n";
         Qualifiers quals = FieldType.getQualifiers();
         quals.addRaw();
         const Type* field_type = FieldType.getTypePtr();
