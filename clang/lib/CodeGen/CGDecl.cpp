@@ -1164,8 +1164,10 @@ Address CodeGenModule::createUnnamedGlobalFrom(const VarDecl &D,
     bool isConstant = true;
     llvm::GlobalVariable *InsertBefore = nullptr;
     LangAS as = GetGlobalConstantAddressSpace();
-    if (!D.getType().hasAddressSpace()) {
-      as = LangAS::sigmode_raw;
+    if (Target.isSigModeSupported()) {
+      if (!D.getType().hasAddressSpace()) {
+        as = LangAS::sigmode_raw;
+      }
     }
     unsigned AS =
         getContext().getTargetAddressSpace(as);
@@ -1636,8 +1638,10 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // building the instruction so that it's there even in no-asserts
       // builds.
       LangAS as = Ty.getAddressSpace();
-      if (!Ty.hasAddressSpace() && Ty.isRawQualified()){
-        as = LangAS::sigmode_raw;
+      if (Target.isSigModeSupported()) {
+        if (!Ty.hasAddressSpace() && Ty.isRawQualified()){
+          as = LangAS::sigmode_raw;
+        }
       }
       address = CreateTempAlloca(allocaTy, as,
                                  allocaAlignment, D.getName(),

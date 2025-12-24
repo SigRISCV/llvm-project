@@ -746,12 +746,23 @@ bool RISCVSigMemcpyExpand::expandSigMemset(IntrinsicInst *II) {
 bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   // Check if we should run this pass
   auto &TPC = getAnalysis<TargetPassConfig>();
-  const RISCVSubtarget *ST = 
-      &TPC.getTM<RISCVTargetMachine>().getSubtarget<RISCVSubtarget>(
-          *M.begin());
+    const TargetMachine &TM = TPC.getTM<TargetMachine>();
   
-  if (!ST->isSigModeSupport())
+  bool SigModeEnabled = false;
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    const RISCVSubtarget &ST = TM.getSubtarget<RISCVSubtarget>(F);
+    if (ST.isSigModeSupport()) {
+      SigModeEnabled = true;
+      break;
+    }
+  }
+
+  if (!SigModeEnabled) {
+    LLVM_DEBUG(dbgs() << "SigMode not enabled, skipping\n");
     return false;
+  }
   
   Mod = &M;
   DL = &M.getDataLayout();

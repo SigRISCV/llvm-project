@@ -23970,7 +23970,7 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
       Callee = getLargeGlobalAddress(S, DL, PtrVT, DAG);
     else if (auto *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
       // Check if callee is a libc memory function for XSig mode
-      if (Subtarget.hasVendorXSig() && isLibcMemoryFunction(S->getSymbol()))
+      if (Subtarget.isSigMode() && isLibcMemoryFunction(S->getSymbol()))
         CalleeIsLibcMemoryFunc = true;
       Callee = getLargeExternalSymbol(S, DL, PtrVT, DAG);
       CalleeIsLargeExternalSymbol = true;
@@ -23980,7 +23980,7 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
     Callee = DAG.getTargetGlobalAddress(GV, DL, PtrVT, 0, RISCVII::MO_CALL);
   } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
     // Check if callee is a libc memory function for XSig mode
-    if (Subtarget.hasVendorXSig() && isLibcMemoryFunction(S->getSymbol()))
+    if (Subtarget.isSigMode() && isLibcMemoryFunction(S->getSymbol()))
       CalleeIsLibcMemoryFunc = true;
     Callee = DAG.getTargetExternalSymbol(S->getSymbol(), PtrVT, RISCVII::MO_CALL);
   }

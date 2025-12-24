@@ -2497,17 +2497,19 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       return CGF.CGM.getTargetCodeGenInfo().performAddrSpaceCast(
           CGF, Src, E->getType().getAddressSpace(), DstTy);
 
-    unsigned int raw_addrspace = CGF.CGM.getTargetCodeGenInfo().getSigModeRawTargetAddressSpace();
-    if(SrcTy->isPtrOrPtrVectorTy() && DstTy->isPtrOrPtrVectorTy() &&
-      SrcTy->getPointerAddressSpace() != DstTy->getPointerAddressSpace() &&
-      (SrcTy->getPointerAddressSpace() == raw_addrspace || DstTy->getPointerAddressSpace() == raw_addrspace)){
-      QualType pointee = cast<PointerType>(DestTy)->getPointeeType();
-      const Type* pointee_type = pointee.getTypePtr();
-      // if (pointee_type->isContainPointer()) {
-      //   CGF.CGM.getDiags().Report(CE->getBeginLoc(), diag::err_cast_with_attr_without_pointer) << pointee.getAsString();
-      // }
-      return CGF.CGM.getTargetCodeGenInfo().performAddrSpaceCast(
-          CGF, Src, E->getType().getAddressSpace(), DstTy);
+    if (CGF.getContext().getTargetInfo().isSigModeSupported()) {
+      unsigned int raw_addrspace = CGF.CGM.getTargetCodeGenInfo().getSigModeRawTargetAddressSpace();
+      if(SrcTy->isPtrOrPtrVectorTy() && DstTy->isPtrOrPtrVectorTy() &&
+        SrcTy->getPointerAddressSpace() != DstTy->getPointerAddressSpace() &&
+        (SrcTy->getPointerAddressSpace() == raw_addrspace || DstTy->getPointerAddressSpace() == raw_addrspace)){
+        QualType pointee = cast<PointerType>(DestTy)->getPointeeType();
+        const Type* pointee_type = pointee.getTypePtr();
+        // if (pointee_type->isContainPointer()) {
+        //   CGF.CGM.getDiags().Report(CE->getBeginLoc(), diag::err_cast_with_attr_without_pointer) << pointee.getAsString();
+        // }
+        return CGF.CGM.getTargetCodeGenInfo().performAddrSpaceCast(
+            CGF, Src, E->getType().getAddressSpace(), DstTy);
+      }
     }
 
     assert(
