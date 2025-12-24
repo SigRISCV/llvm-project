@@ -23955,10 +23955,23 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // TargetGlobalAddress/TargetExternalSymbol node so that legalize won't
   // split it and then direct call can be matched by PseudoCALL.
   bool CalleeIsLargeExternalSymbol = false;
+  bool CalleeIsLibcMemoryFunc = false;
+
+  // Helper lambda to check if a symbol is a libc memory function that should
+  // use raw call (switchs) in SigMode. These functions operate on raw memory
+  // and need mode switching.
+  auto isLibcMemoryFunction = [](StringRef Name) {
+    return Name == "memcpy" || Name == "memmove" || Name == "memset" ||
+           Name == "bzero" || Name == "memcmp" || Name == "bcopy";
+  };
+
   if (getTargetMachine().getCodeModel() == CodeModel::Large) {
     if (auto *S = dyn_cast<GlobalAddressSDNode>(Callee))
       Callee = getLargeGlobalAddress(S, DL, PtrVT, DAG);
     else if (auto *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
+      // Check if callee is a libc memory function for XSig mode
+      if (Subtarget.hasVendorXSig() && isLibcMemoryFunction(S->getSymbol()))
+        CalleeIsLibcMemoryFunc = true;
       Callee = getLargeExternalSymbol(S, DL, PtrVT, DAG);
       CalleeIsLargeExternalSymbol = true;
     }
@@ -23966,6 +23979,9 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
     const GlobalValue *GV = S->getGlobal();
     Callee = DAG.getTargetGlobalAddress(GV, DL, PtrVT, 0, RISCVII::MO_CALL);
   } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
+    // Check if callee is a libc memory function for XSig mode
+    if (Subtarget.hasVendorXSig() && isLibcMemoryFunction(S->getSymbol()))
+      CalleeIsLibcMemoryFunc = true;
     Callee = DAG.getTargetExternalSymbol(S->getSymbol(), PtrVT, RISCVII::MO_CALL);
   }
 
@@ -24016,7 +24032,10 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
     return Ret;
   }
 
-  unsigned CallOpc = NeedSWGuarded ? RISCVISD::SW_GUARDED_CALL : CLI.IsRaw ? RISCVISD::RCALL : RISCVISD::CALL;
+  // For XSig: use RCALL (switchs) for raw functions or libc memory functions
+  unsigned CallOpc = NeedSWGuarded ? RISCVISD::SW_GUARDED_CALL
+                     : (CLI.IsRaw || CalleeIsLibcMemoryFunc) ? RISCVISD::RCALL
+                                                             : RISCVISD::CALL;
   Chain = DAG.getNode(CallOpc, DL, NodeTys, Ops);
   if (CLI.CFIType)
     Chain.getNode()->setCFIType(CLI.CFIType->getZExtValue());
