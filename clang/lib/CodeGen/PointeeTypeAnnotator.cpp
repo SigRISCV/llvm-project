@@ -9,6 +9,7 @@
 #include "PointeeTypeAnnotator.h"
 #include "CodeGenModule.h"
 #include "CodeGenTypes.h"
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/DeclCXX.h"
 #include "llvm/IR/Constants.h"
@@ -293,32 +294,34 @@ void PointeeTypeAnnotator::annotateGlobalVariable(llvm::GlobalVariable *GV,
     GV->setMetadata("sigmode.type", TypeMD);
   }
 
-  // For pointer types, also annotate the pointee
-  if (Ty->isPointerType()) {
-    llvm::MDNode *PointeeMD = getPointeeMetadata(Ty);
-    if (PointeeMD) {
-      GV->setMetadata("sigmode.pointee", PointeeMD);
-    }
-  }
+  // // For pointer types, also annotate the pointee
+  // if (Ty->isPointerType()) {
+  //   llvm::MDNode *PointeeMD = getPointeeMetadata(Ty);
+  //   if (PointeeMD) {
+  //     GV->setMetadata("sigmode.pointee", PointeeMD);
+  //   }
+  // }
 }
 
 void PointeeTypeAnnotator::annotateAlloca(llvm::AllocaInst *AI, QualType Ty) {
   if (!isEnabled())
     return;
 
+  QualType allocType = CGM.getContext().getPointerType(Ty);
+
   // Get type metadata
-  llvm::MDNode *TypeMD = getTypeMetadata(Ty);
+  llvm::MDNode *TypeMD = getTypeMetadata(allocType);
   if (TypeMD) {
     AI->setMetadata("sigmode.type", TypeMD);
   }
 
-  // For pointer types, also annotate the pointee
-  if (Ty->isPointerType()) {
-    llvm::MDNode *PointeeMD = getPointeeMetadata(Ty);
-    if (PointeeMD) {
-      AI->setMetadata("sigmode.pointee", PointeeMD);
-    }
-  }
+  // // For pointer types, also annotate the pointee
+  // if (Ty->isPointerType()) {
+  //   llvm::MDNode *PointeeMD = getPointeeMetadata(Ty);
+  //   if (PointeeMD) {
+  //     AI->setMetadata("sigmode.pointee", PointeeMD);
+  //   }
+  // }
 }
 
 void PointeeTypeAnnotator::annotateFunctionArg(llvm::Function *F,
