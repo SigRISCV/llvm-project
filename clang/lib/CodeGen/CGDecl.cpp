@@ -22,6 +22,7 @@
 #include "ConstantEmitter.h"
 #include "EHScopeStack.h"
 #include "PatternInit.h"
+#include "PointeeTypeAnnotator.h"
 #include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
@@ -1778,6 +1779,14 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
     if (shouldExtendLifetime(getContext(), CurCodeDecl, D, CXXABIThisDecl))
       EHStack.pushCleanup<FakeUse>(NormalFakeUse,
                                    emission.getAllocatedAddress());
+  }
+
+  // Annotate alloca with pointee type information.
+  if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
+    if (AllocaAddr.isValid()) {
+      if (auto *AI = dyn_cast<llvm::AllocaInst>(AllocaAddr.getPointer()))
+        PTA->annotateAlloca(AI, Ty);
+    }
   }
 
   return emission;
