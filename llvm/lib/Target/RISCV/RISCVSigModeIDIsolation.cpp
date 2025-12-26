@@ -384,6 +384,8 @@ bool RISCVSigModeIDIsolation::processAllocas(Function &F, Function *SetNewIDFn,
         continue;
       if (isa<CallInst>(User)) {
         CallInst *CI = cast<CallInst>(User);
+        if (!CI->getCalledFunction())
+          continue;
         if (CI->getCalledFunction()->getName().starts_with("llvm.lifetime.start"))
           continue;
         if (CI->getCalledFunction()->getName().starts_with("llvm.lifetime.end"))
