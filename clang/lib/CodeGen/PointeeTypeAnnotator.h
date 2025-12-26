@@ -96,9 +96,6 @@ private:
   /// Maps canonical QualType to MDNode.
   llvm::DenseMap<const void *, llvm::MDNode *> TypeMetadataCache;
 
-  /// Set of types currently being processed to detect cycles.
-  llvm::SmallPtrSet<const void *, 8> TypesInProgress;
-
   /// Create metadata for basic types (int, char, float, etc.)
   /// Format: !{llvm_type undef}
   llvm::MDNode *createBasicTypeMD(llvm::Type *LLVMTy);

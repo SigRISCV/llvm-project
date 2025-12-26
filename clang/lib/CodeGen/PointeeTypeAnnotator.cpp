@@ -49,10 +49,6 @@ llvm::MDNode *PointeeTypeAnnotator::getTypeMetadata(QualType Ty) {
   if (!isEnabled())
     return nullptr;
 
-  // Handle void type - return nullptr
-  if (Ty->isVoidType())
-    return nullptr;
-
   Ty = Ty.getCanonicalType();
 
   // Check cache first
@@ -61,15 +57,9 @@ llvm::MDNode *PointeeTypeAnnotator::getTypeMetadata(QualType Ty) {
   if (It != TypeMetadataCache.end())
     return It->second;
 
-  // Check for cycles (self-referential types)
-  if (TypesInProgress.count(Key)) {
-    // Return a simple type marker for recursive reference
-    llvm::Type *LLVMTy = getLLVMType(Ty);
-    return createBasicTypeMD(LLVMTy);
-  }
-
-  // Mark this type as being processed
-  TypesInProgress.insert(Key);
+  // Create a temporary placeholder to handle cycles
+  llvm::TempMDTuple Placeholder = llvm::MDNode::getTemporary(Ctx, {});
+  TypeMetadataCache[Key] = Placeholder.get();
 
   llvm::MDNode *Result = nullptr;
 
@@ -87,12 +77,12 @@ llvm::MDNode *PointeeTypeAnnotator::getTypeMetadata(QualType Ty) {
     Result = createBasicTypeMD(LLVMTy);
   }
 
-  // Done processing this type
-  TypesInProgress.erase(Key);
+  // Replace the temporary placeholder with the actual result
+  DEBUG_FILE << Ty.getAsString() << " => " << *Result << "\n";
+  Placeholder->replaceAllUsesWith(Result);
 
-  // Cache the result
-  if (Result)
-    TypeMetadataCache[Key] = Result;
+  // Update cache with the permanent result
+  TypeMetadataCache[Key] = Result;
 
   return Result;
 }
@@ -223,14 +213,14 @@ llvm::MDNode *PointeeTypeAnnotator::createRecordTypeMD(const RecordType *RT) {
         llvm::ConstantAsMetadata::get(StructUndef),
         FieldsMD
     };
-    return llvm::MDNode::get(Ctx, Ops);
-  } else {
-    // No fields or empty struct
-    llvm::Metadata *Ops[] = {
-        llvm::ConstantAsMetadata::get(StructUndef)
-    };
-    return llvm::MDNode::get(Ctx, Ops);
+    return llvm::MDNode::getDistinct(Ctx, Ops);
   }
+
+  // No fields or empty struct
+  llvm::Metadata *Ops[] = {
+      llvm::ConstantAsMetadata::get(StructUndef)
+  };
+  return llvm::MDNode::getDistinct(Ctx, Ops);
 }
 
 //===----------------------------------------------------------------------===//
@@ -249,10 +239,8 @@ llvm::MDNode *PointeeTypeAnnotator::createFunctionTypeMD(const FunctionType *FT)
 
   // Return type
   QualType RetTy = FT->getReturnType();
-  if (!RetTy->isVoidType()) {
-    if (llvm::MDNode *RetMD = getTypeMetadata(RetTy))
-      TypeMDs.push_back(RetMD);
-  }
+  if (llvm::MDNode *RetMD = getTypeMetadata(RetTy))
+    TypeMDs.push_back(RetMD);
 
   // Parameter types
   if (const auto *FPT = dyn_cast<FunctionProtoType>(FT)) {
@@ -270,13 +258,13 @@ llvm::MDNode *PointeeTypeAnnotator::createFunctionTypeMD(const FunctionType *FT)
         llvm::ConstantAsMetadata::get(PtrUndef),
         TypesMD
     };
-    return llvm::MDNode::get(Ctx, Ops);
-  } else {
-    llvm::Metadata *Ops[] = {
-        llvm::ConstantAsMetadata::get(PtrUndef)
-    };
-    return llvm::MDNode::get(Ctx, Ops);
+    return llvm::MDNode::getDistinct(Ctx, Ops);
   }
+
+  llvm::Metadata *Ops[] = {
+      llvm::ConstantAsMetadata::get(PtrUndef)
+  };
+  return llvm::MDNode::getDistinct(Ctx, Ops);
 }
 
 //===----------------------------------------------------------------------===//
