@@ -288,8 +288,10 @@ void PointeeTypeAnnotator::annotateGlobalVariable(llvm::GlobalVariable *GV,
   if (!isEnabled())
     return;
 
+  QualType globalType = CGM.getContext().getPointerType(Ty);
+
   // Get type metadata
-  llvm::MDNode *TypeMD = getTypeMetadata(Ty);
+  llvm::MDNode *TypeMD = getTypeMetadata(globalType);
   if (TypeMD) {
     GV->setMetadata("sigmode.type", TypeMD);
   }
