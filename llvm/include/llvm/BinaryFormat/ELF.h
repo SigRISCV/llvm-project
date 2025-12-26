@@ -1608,6 +1608,7 @@ enum {
 
   // RISCV program header types.
   PT_RISCV_ATTRIBUTES = 0x70000003,
+  PT_RISCV_SIG_HEADER = 0x70000004,
 };
 
 // Segment flag bits.

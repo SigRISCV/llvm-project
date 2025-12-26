@@ -2075,9 +2075,21 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
         addPhdrForSection(part, SHT_MIPS_OPTIONS, PT_MIPS_OPTIONS, PF_R);
         addPhdrForSection(part, SHT_MIPS_ABIFLAGS, PT_MIPS_ABIFLAGS, PF_R);
       }
-      if (ctx.arg.emachine == EM_RISCV)
+      if (ctx.arg.emachine == EM_RISCV) {
         addPhdrForSection(part, SHT_RISCV_ATTRIBUTES, PT_RISCV_ATTRIBUTES,
                           PF_R);
+        // Add PT_RISCV_SIG_HEADER for SigRISCV .sig_header section
+        // Find section by SHF_RISCV_SIG_HEADER flag
+        unsigned partNo = part.getNumber(ctx);
+        auto sigHeaderSec = llvm::find_if(ctx.outputSections, [=](OutputSection *cmd) {
+          return cmd->partition == partNo && (cmd->flags & SHF_RISCV_SIG_HEADER);
+        });
+        if (sigHeaderSec != ctx.outputSections.end()) {
+          auto entry = std::make_unique<PhdrEntry>(ctx, PT_RISCV_SIG_HEADER, PF_R);
+          entry->add(*sigHeaderSec);
+          part.phdrs.push_back(std::move(entry));
+        }
+      }
     }
     ctx.out.programHeaders->size =
         sizeof(Elf_Phdr) * ctx.mainPart->phdrs.size();
