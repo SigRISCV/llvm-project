@@ -1370,21 +1370,13 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
 
   // Annotate function arguments and return type with pointee type information.
   if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
-    // Annotate return type
-    bool RetIsIndirect = CurFnInfo->getReturnInfo().getKind() == ABIArgInfo::Indirect;
-    PTA->annotateFunctionReturn(CurFn, RetTy, RetIsIndirect);
-    
-    // Annotate arguments
-    unsigned ArgIdx = 0;
-    CGFunctionInfo::const_arg_iterator info_it = CurFnInfo->arg_begin();
-    for (const VarDecl *Arg : Args) {
-      if (info_it == CurFnInfo->arg_end())
-        break;
-      const ABIArgInfo &ArgI = info_it->info;
-      bool IsIndirect = ArgI.isIndirect() || ArgI.isIndirectAliased() || ArgI.isInAlloca();
-      PTA->annotateFunctionArg(CurFn, ArgIdx, Arg->getType(), IsIndirect);
-      ++ArgIdx;
-      ++info_it;
+    // Get function type from the function declaration
+    QualType FuncTy;
+    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(CurFuncDecl)) {
+      FuncTy = FD->getType();
+    }
+    if (!FuncTy.isNull()) {
+      PTA->annotateFunction(CurFn, FuncTy, *CurFnInfo);
     }
   }
 }

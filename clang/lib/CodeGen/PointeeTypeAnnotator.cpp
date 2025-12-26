@@ -7,13 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "PointeeTypeAnnotator.h"
+#include "ABIInfo.h"
 #include "CodeGenModule.h"
 #include "CodeGenTypes.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/TypeBase.h"
+#include "clang/CodeGen/CGFunctionInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -78,7 +83,6 @@ llvm::MDNode *PointeeTypeAnnotator::getTypeMetadata(QualType Ty) {
   }
 
   // Replace the temporary placeholder with the actual result
-  DEBUG_FILE << Ty.getAsString() << " => " << *Result << "\n";
   Placeholder->replaceAllUsesWith(Result);
 
   // Update cache with the permanent result
@@ -230,23 +234,53 @@ llvm::MDNode *PointeeTypeAnnotator::createRecordTypeMD(const RecordType *RT) {
 llvm::MDNode *PointeeTypeAnnotator::createFunctionTypeMD(const FunctionType *FT) {
   // For function types, we create metadata for the function pointer
   // Format: !{ptr undef, !{return_type, param_types...}}
+  // We use CGFunctionInfo to get accurate ABI-level argument representation
 
   llvm::Type *PtrTy = llvm::PointerType::get(Ctx, 0);
   llvm::UndefValue *PtrUndef = llvm::UndefValue::get(PtrTy);
 
-  // Collect return type and parameter types
-  llvm::SmallVector<llvm::Metadata *, 8> TypeMDs;
+  // Get CGFunctionInfo through arrangeFreeFunctionType
+  const CGFunctionInfo *FI = nullptr;
+  if (const auto *FPT = dyn_cast<FunctionProtoType>(FT)) {
+    FI = &CGM.getTypes().arrangeFreeFunctionType(
+        CanQual<FunctionProtoType>::CreateUnsafe(QualType(FPT, 0)));
+  } else if (const auto *FNPT = dyn_cast<FunctionNoProtoType>(FT)) {
+    FI = &CGM.getTypes().arrangeFreeFunctionType(
+        CanQual<FunctionNoProtoType>::CreateUnsafe(QualType(FNPT, 0)));
+  }
+
+  if (!FI) {
+    // Fallback: just create a basic function pointer metadata
+    llvm::Metadata *Ops[] = {llvm::ConstantAsMetadata::get(PtrUndef)};
+    return llvm::MDNode::getDistinct(Ctx, Ops);
+  }
+
+  // Collect return type and parameter types using ABI info
+  llvm::SmallVector<llvm::Metadata *, 16> TypeMDs;
 
   // Return type
   QualType RetTy = FT->getReturnType();
-  if (llvm::MDNode *RetMD = getTypeMetadata(RetTy))
-    TypeMDs.push_back(RetMD);
+  const ABIArgInfo &RetInfo = FI->getReturnInfo();
+  
+  // If return is indirect (sret), first element is void, then sret pointer type
+  if (RetInfo.isIndirect()) {
+    TypeMDs.push_back(getTypeMetadata(CGM.getContext().VoidTy));
+  }
+  annotateFunctionArg(TypeMDs, RetTy, RetInfo);
 
   // Parameter types
   if (const auto *FPT = dyn_cast<FunctionProtoType>(FT)) {
+    CGFunctionInfo::const_arg_iterator info_it = FI->arg_begin();
     for (QualType ParamTy : FPT->param_types()) {
-      if (llvm::MDNode *ParamMD = getTypeMetadata(ParamTy))
-        TypeMDs.push_back(ParamMD);
+      if (info_it != FI->arg_end()) {
+        const ABIArgInfo &ArgI = info_it->info;
+        annotateFunctionArg(TypeMDs, ParamTy, ArgI);
+        ++info_it;
+      } else {
+        // Fallback for variadic or mismatched args
+        ABIArgInfo DirectInfo = ABIArgInfo::getDirect();
+        annotateFunctionArg(TypeMDs, ParamTy, DirectInfo);
+      }
     }
   }
 
@@ -314,52 +348,179 @@ void PointeeTypeAnnotator::annotateAlloca(llvm::AllocaInst *AI, QualType Ty) {
   // }
 }
 
-void PointeeTypeAnnotator::annotateFunctionArg(llvm::Function *F,
-                                                unsigned ArgIdx,
-                                                QualType OriginalTy,
-                                                bool IsIndirect) {
-  if (!isEnabled())
-    return;
+void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata *, 16>& ArgsMDs,
+  QualType argtype, const ABIArgInfo &arginfo) {
+  argtype = argtype.getCanonicalType();
+  
+  switch (arginfo.getKind()) {
+    case ABIArgInfo::Indirect:
+    case ABIArgInfo::IndirectAliased: {
+      // Indirect: passed as a pointer to the actual type
+      QualType pointerType = CGM.getContext().getPointerType(argtype);
+      llvm::MDNode *NodeMD = getTypeMetadata(pointerType);
+      if (NodeMD)
+        ArgsMDs.push_back(NodeMD);
+      break;
+    }
+    case ABIArgInfo::Direct:
+    case ABIArgInfo::Extend: {
+      // Direct/Extend: passed directly (possibly with sign/zero extension)
+      // Check if there's a coercion type
+      llvm::Type *CoerceTy = arginfo.getCoerceToType();
+      if (CoerceTy && CoerceTy != getLLVMType(argtype)) {
+        // There's a coercion - create metadata for the coerced LLVM type
+        llvm::MDNode *NodeMD = createBasicTypeMD(CoerceTy);
+        if (NodeMD)
+          ArgsMDs.push_back(NodeMD);
+      } else {
+        llvm::MDNode *NodeMD = getTypeMetadata(argtype);
+        if (NodeMD)
+          ArgsMDs.push_back(NodeMD);
+      }
+      break;
+    }
+    case ABIArgInfo::InAlloca: {
+      // InAlloca: argument is in a struct allocated on the stack
+      // For annotation, treat as a pointer to the type
+      QualType pointerType = CGM.getContext().getPointerType(argtype);
+      llvm::MDNode *NodeMD = getTypeMetadata(pointerType);
+      if (NodeMD)
+        ArgsMDs.push_back(NodeMD);
+      break;
+    }
+    case ABIArgInfo::Expand: {
+      // Expand: struct is expanded into individual fields
+      if (const auto *ArrayType = argtype->getAsArrayTypeUnsafe()) {
+        QualType ElemTy = ArrayType->getElementType();
+        uint64_t NumElements = 1;
+        if (const auto *CAT = dyn_cast<ConstantArrayType>(ArrayType)) {
+          NumElements = CAT->getSize().getZExtValue();
+        }
+        for (uint64_t i = 0; i < NumElements; ++i) {
+          // Expanded array elements are passed directly
+          ABIArgInfo DirectInfo = ABIArgInfo::getDirect();
+          annotateFunctionArg(ArgsMDs, ElemTy, DirectInfo);
+        }
+      } else if (const auto *RecordTy = argtype->getAs<RecordType>()) {
+        const RecordDecl *RD = RecordTy->getDecl()->getDefinition();
+        if (!RD)
+          RD = RecordTy->getDecl();
 
-  if (ArgIdx >= F->arg_size())
-    return;
+        for (const auto *FD : RD->fields()) {
+          QualType FieldTy = FD->getType();
+          // Recursively expand nested structs/arrays, otherwise direct
+          if (FieldTy->isRecordType() || FieldTy->isArrayType()) {
+            ABIArgInfo ExpandInfo = ABIArgInfo::getExpand();
+            annotateFunctionArg(ArgsMDs, FieldTy, ExpandInfo);
+          } else {
+            ABIArgInfo DirectInfo = ABIArgInfo::getDirect();
+            annotateFunctionArg(ArgsMDs, FieldTy, DirectInfo);
+          }
+        }
+      } else {
+        // Fallback to direct annotation for scalars
+        llvm::MDNode *NodeMD = getTypeMetadata(argtype);
+        if (NodeMD)
+          ArgsMDs.push_back(NodeMD);
+      }
+      break;
+    }
+    case ABIArgInfo::CoerceAndExpand: {
+      // CoerceAndExpand: the coerce-to type is a struct that gets expanded
+      // We can get the exact types from ABIArgInfo
+      llvm::StructType *CoerceTy = arginfo.getCoerceAndExpandType();
+      if (CoerceTy) {
+        // Get the unpacked elements (skip padding elements)
+        llvm::ArrayRef<llvm::Type *> UnpackedTypes = arginfo.getCoerceAndExpandTypeSequence();
+        for (llvm::Type *ElemTy : UnpackedTypes) {
+          llvm::MDNode *NodeMD = createBasicTypeMD(ElemTy);
+          if (NodeMD)
+            ArgsMDs.push_back(NodeMD);
+        }
+      } else {
+        // Fallback: expand struct fields
+        if (const auto *RecordTy = argtype->getAs<RecordType>()) {
+          const RecordDecl *RD = RecordTy->getDecl()->getDefinition();
+          if (!RD)
+            RD = RecordTy->getDecl();
 
-  llvm::MDNode *TypeMD = getTypeMetadata(OriginalTy);
-  if (!TypeMD)
-    return;
-
-  // Format: !{i32 arg_index, i1 is_indirect, !type}
-  llvm::Metadata *Ops[] = {
-      llvm::ConstantAsMetadata::get(
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), ArgIdx)),
-      llvm::ConstantAsMetadata::get(
-          llvm::ConstantInt::get(llvm::Type::getInt1Ty(Ctx), IsIndirect)),
-      TypeMD
-  };
-
-  std::string MDName = "sigmode.arg." + std::to_string(ArgIdx);
-  F->setMetadata(MDName, llvm::MDNode::get(Ctx, Ops));
+          for (const auto *FD : RD->fields()) {
+            QualType FieldTy = FD->getType();
+            ABIArgInfo DirectInfo = ABIArgInfo::getDirect();
+            annotateFunctionArg(ArgsMDs, FieldTy, DirectInfo);
+          }
+        } else {
+          llvm::MDNode *NodeMD = getTypeMetadata(argtype);
+          if (NodeMD)
+            ArgsMDs.push_back(NodeMD);
+        }
+      }
+      break;
+    }
+    case ABIArgInfo::TargetSpecific: {
+      // TargetSpecific: handled by target-specific hooks
+      // For now, treat as direct
+      llvm::MDNode *NodeMD = getTypeMetadata(argtype);
+      if (NodeMD)
+        ArgsMDs.push_back(NodeMD);
+      break;
+    }
+    case ABIArgInfo::Ignore:
+      // Ignore: argument is not passed (void, empty structs)
+      // No metadata needed
+      break;
+  }
 }
 
-void PointeeTypeAnnotator::annotateFunctionReturn(llvm::Function *F,
-                                                   QualType RetTy,
-                                                   bool IsIndirect) {
-  if (!isEnabled())
-    return;
+void PointeeTypeAnnotator::annotateFunction(llvm::Function *F, QualType FuncTy, 
+  const CGFunctionInfo &FI) {
 
-  if (RetTy->isVoidType())
-    return;
+  FuncTy = FuncTy.getCanonicalType();
+  // Check cache first
+  const void *Key = getTypeCacheKey(FuncTy);
+  auto It = TypeMetadataCache.find(Key);
+  llvm::MDNode *Result = nullptr;
+  if (It != TypeMetadataCache.end()) {
+    Result = It->second;
+  } else {
+    // Create a temporary placeholder to handle cycles
+    llvm::TempMDTuple Placeholder = llvm::MDNode::getTemporary(Ctx, {});
+    TypeMetadataCache[Key] = Placeholder.get();
 
-  llvm::MDNode *TypeMD = getTypeMetadata(RetTy);
-  if (!TypeMD)
-    return;
+    // the first metadata is for return
+    // the other is for arg list in IR
+    llvm::SmallVector<llvm::Metadata *, 16> ArgsMDs;
+    
+    QualType RetTy = FuncTy->getAs<FunctionType>()->getReturnType();
+    const ABIArgInfo &RetInfo = FI.getReturnInfo();
+    if (RetInfo.isIndirect()) {
+      // sret: return value is passed as an indirect pointer argument
+      QualType voidtype = CGM.getContext().VoidTy;
+      ArgsMDs.push_back(getTypeMetadata(voidtype));
+    }
 
-  // Format: !{i1 is_indirect, !type}
-  llvm::Metadata *Ops[] = {
-      llvm::ConstantAsMetadata::get(
-          llvm::ConstantInt::get(llvm::Type::getInt1Ty(Ctx), IsIndirect)),
-      TypeMD
-  };
+    // Process return type
+    annotateFunctionArg(ArgsMDs, RetTy, RetInfo);
+    
+    // Process all arguments using FI's argument info
+    for (const auto &ArgInfo : FI.arguments()) {
+      annotateFunctionArg(ArgsMDs, ArgInfo.type, ArgInfo.info);
+    }
 
-  F->setMetadata("sigmode.ret", llvm::MDNode::get(Ctx, Ops));
+    llvm::Type *PtrTy = llvm::PointerType::get(Ctx, 0);
+    llvm::UndefValue *PtrUndef = llvm::UndefValue::get(PtrTy);
+    llvm::MDNode *TypesMD = llvm::MDNode::getDistinct(Ctx, ArgsMDs);
+    llvm::Metadata *Ops[] = {
+      llvm::ConstantAsMetadata::get(PtrUndef),
+      TypesMD
+    };
+    Result = llvm::MDNode::getDistinct(Ctx, Ops);
+
+    Placeholder->replaceAllUsesWith(Result);
+    // Update cache with the permanent result
+    TypeMetadataCache[Key] = Result;
+  }
+
+  std::string MDName = "sigmode.func";
+  F->setMetadata(MDName, Result);
 }

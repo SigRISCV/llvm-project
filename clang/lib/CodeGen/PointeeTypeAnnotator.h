@@ -29,6 +29,8 @@
 #define LLVM_CLANG_LIB_CODEGEN_POINTEETYPEANNOTATOR_H
 
 #include "clang/AST/Type.h"
+#include "clang/CodeGen/CGFunctionInfo.h"
+#include "CGCall.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -72,13 +74,12 @@ public:
   /// Annotate an alloca instruction with type metadata.
   void annotateAlloca(llvm::AllocaInst *AI, QualType Ty);
 
-  /// Annotate function argument with type metadata.
-  /// Handles both direct and indirect (byval/sret) arguments.
-  void annotateFunctionArg(llvm::Function *F, unsigned ArgIdx,
-                           QualType OriginalTy, bool IsIndirect);
+  /// Annotate a function with its type metadata based on ABI information.
+  void annotateFunction(llvm::Function *F, QualType FuncType, const CGFunctionInfo &FI);
 
-  /// Annotate function return type with type metadata.
-  void annotateFunctionReturn(llvm::Function *F, QualType RetTy, bool IsIndirect);
+  /// Process a single function argument based on ABIArgInfo.
+  void annotateFunctionArg(llvm::SmallVector<llvm::Metadata *, 16>& ArgsMDs, 
+                           QualType argtype, const ABIArgInfo &arginfo);
 
   //===--------------------------------------------------------------------===//
   // Query Functions
