@@ -2079,12 +2079,14 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
         addPhdrForSection(part, SHT_RISCV_ATTRIBUTES, PT_RISCV_ATTRIBUTES,
                           PF_R);
         // Add PT_RISCV_SIG_HEADER for SigRISCV .sig_header section
-        // Find section by SHF_RISCV_SIG_HEADER flag
+        // Find section by name since SHF_RISCV_SIG_HEADER flag is set later
         unsigned partNo = part.getNumber(ctx);
         auto sigHeaderSec = llvm::find_if(ctx.outputSections, [=](OutputSection *cmd) {
-          return cmd->partition == partNo && (cmd->flags & SHF_RISCV_SIG_HEADER);
+          return cmd->partition == partNo && cmd->name == sigSectionHeader;
         });
         if (sigHeaderSec != ctx.outputSections.end()) {
+          // Set the flag early for consistency (it will be set again later in fillSigHeaderSegmentAddresses)
+          (*sigHeaderSec)->flags |= SHF_RISCV_SIG_HEADER;
           auto entry = std::make_unique<PhdrEntry>(ctx, PT_RISCV_SIG_HEADER, PF_R);
           entry->add(*sigHeaderSec);
           part.phdrs.push_back(std::move(entry));
