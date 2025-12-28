@@ -581,9 +581,8 @@ void TypeRecovery::handleGEP(GetElementPtrInst *GEP, TypeSet &Result) {
       
       if (auto *FieldIdxCI = dyn_cast<ConstantInt>(*IdxIt)) {
         unsigned FieldIdx = FieldIdxCI->getZExtValue();
-        if (MDNode *FieldMD = getStructFieldTypeMD(PointeeMD, FieldIdx)) {
+        if (MDNode *ResultMD = getStructFieldTypeMD(PointeeMD, FieldIdx)) {
           // Result is pointer to field type
-          MDNode *ResultMD = getOrCreatePtrToTypeMD(FieldMD);
           if (ResultMD)
             Result.insert(ResultMD);
         }
@@ -597,7 +596,7 @@ void TypeRecovery::handleGEP(GetElementPtrInst *GEP, TypeSet &Result) {
       }
     } else {
       // For other cases, result is still ptr to same pointee type
-      MDNode *ResultMD = getOrCreatePtrToTypeMD(PointeeMD);
+      MDNode *ResultMD = BaseMD;
       if (ResultMD)
         Result.insert(ResultMD);
     }
@@ -627,8 +626,6 @@ void TypeRecovery::propagateBackward(Value *V) {
     if (Callee && (Callee->getName().contains("memcpy") ||
                    Callee->getName().contains("memmove"))) {
       backpropMemcpy(CB);
-    } else if (Callee && Callee->getName().contains("memset")) {
-      backpropMemset(CB);
     }
   }
 }
@@ -740,22 +737,6 @@ void TypeRecovery::backpropMemcpy(CallBase *CB) {
     if (unionTypes(Src, *DestTypes)) {
       NextWorklist.insert(Src);
     }
-  }
-}
-
-void TypeRecovery::backpropMemset(CallBase *CB) {
-  // memset(dest, val, len)
-  // dest type is useful for expansion
-  // No backward propagation needed, just mark for processing
-  if (CB->arg_size() < 1)
-    return;
-  
-  Value *Dest = CB->getArgOperand(0);
-  const TypeSet *DestTypes = getTypeSet(Dest);
-  
-  // If we have dest type info, mark the memset for later processing
-  if (DestTypes && !DestTypes->empty()) {
-    LLVM_DEBUG(dbgs() << "  Memset dest has type info\n");
   }
 }
 
