@@ -227,9 +227,6 @@ private:
 
   /// Memcpy/Memmove: merge src and dest types bidirectionally
   void backpropMemcpy(CallBase *CI);
-
-  /// Memset: propagate dest type
-  void backpropMemset(CallBase *CI);
 };
 
 } // end namespace llvm
