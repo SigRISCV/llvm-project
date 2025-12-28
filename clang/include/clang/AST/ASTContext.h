@@ -2493,6 +2493,23 @@ public:
     return getExtQualType(Ptr, Qc);
   }
 
+  QualType getRawQual(QualType type) const {
+    if (type.isRawQualified()) { 
+      return type;
+    }
+    Qualifiers Qs = type.getQualifiers();
+    Qs.addRaw();
+    return getQualifiedType(type, Qs);
+  }
+
+  QualType getNoRawQual(QualType type) const {
+    type = type.getNoRawChainType(*this);
+    Qualifiers Qs = type.getQualifiers();
+    Qs.removeRaw();
+    QualType ret = getQualifiedType(type.getTypePtr(), Qs);
+    return ret;
+  }
+
   QualType maybeAddRawQualifier(QualType Ty, bool IsRawCall) {
     if (IsRawCall && Ty->isRecordType()) {
       return getQualifiedType(Ty, Qualifiers().withRaw());
