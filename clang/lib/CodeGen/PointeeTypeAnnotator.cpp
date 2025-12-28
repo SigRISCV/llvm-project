@@ -19,6 +19,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/Debug.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -54,6 +55,7 @@ llvm::MDNode *PointeeTypeAnnotator::getTypeMetadata(QualType Ty) {
   if (!isEnabled())
     return nullptr;
 
+  Ty = CGM.getContext().getNoRawQual(Ty);
   Ty = Ty.getCanonicalType();
 
   // Check cache first
