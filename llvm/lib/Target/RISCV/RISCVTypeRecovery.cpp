@@ -8,8 +8,11 @@
 
 #include "RISCVTypeRecovery.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "riscv-type-recovery"
 
@@ -270,6 +273,15 @@ void TypeRecovery::run() {
 // Type Map Building
 //===----------------------------------------------------------------------===//
 
+/// Create and register a basic type metadata: !{type undef}
+MDNode *TypeRecovery::createBasicTypeMD(Type *Ty) {
+  UndefValue *Undef = UndefValue::get(Ty);
+  Metadata *Ops[] = {ConstantAsMetadata::get(Undef)};
+  MDNode *MD = MDNode::get(Ctx, Ops);
+  registerType(MD);
+  return MD;
+}
+
 void TypeRecovery::buildTypeMap() {
   LLVM_DEBUG(dbgs() << "Building type map from metadata...\n");
   
@@ -305,6 +317,26 @@ void TypeRecovery::buildTypeMap() {
       collectMetadataRecursive(TypeRegistry->getOperand(I));
     }
   }
+  
+  // Register basic types that may not be annotated by frontend
+  // These are needed for type propagation through primitive operations
+  LLVM_DEBUG(dbgs() << "Registering basic types...\n");
+  
+  // Integer types: i1, i8, i16, i32, i64
+  createBasicTypeMD(Type::getInt1Ty(Ctx));
+  createBasicTypeMD(Type::getInt8Ty(Ctx));
+  createBasicTypeMD(Type::getInt16Ty(Ctx));
+  createBasicTypeMD(Type::getInt32Ty(Ctx));
+  createBasicTypeMD(Type::getInt64Ty(Ctx));
+  
+  // Floating point types: float, double
+  createBasicTypeMD(Type::getFloatTy(Ctx));
+  createBasicTypeMD(Type::getDoubleTy(Ctx));
+  
+  // Void pointer (ptr without pointee info)
+  createBasicTypeMD(PointerType::get(Ctx, 0));
+  
+  LLVM_DEBUG(dbgs() << "Type map now has " << TypeStringToMD.size() << " entries\n");
 }
 
 //===----------------------------------------------------------------------===//
@@ -351,11 +383,36 @@ void TypeRecovery::initialize() {
     // Single pass through all instructions
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
+
         // Check for sigmode.type metadata (alloca, etc.)
         if (MDNode *MD = I.getMetadata("sigmode.type")) {
           addType(&I, MD);
           Worklist.insert(&I);
           continue;
+        }
+        
+        // For any instruction with an output, initialize with its basic type
+        // This ensures every pointer has at least "ptr undef" type
+        if (!I.getType()->isVoidTy()) {
+          Type *OutputTy = I.getType();
+          if (OutputTy->isPointerTy() || OutputTy->isIntegerTy() ||
+              OutputTy->isFloatTy() || OutputTy->isDoubleTy()) {
+            // Look up or create basic type metadata
+            std::string TypeStr;
+            if (OutputTy->isPointerTy()) {
+              TypeStr = "ptr";
+            } else if (OutputTy->isIntegerTy()) {
+              TypeStr = "i" + std::to_string(OutputTy->getIntegerBitWidth());
+            } else if (OutputTy->isFloatTy()) {
+              TypeStr = "f32";
+            } else if (OutputTy->isDoubleTy()) {
+              TypeStr = "f64";
+            }
+            
+            if (MDNode *BasicMD = lookupTypeByString(TypeStr)) {
+              addType(&I, BasicMD);
+            }
+          }
         }
         
         // GEP can get type info from struct/array metadata
@@ -386,6 +443,8 @@ void TypeRecovery::propagate() {
   unsigned MaxIterations = std::max(100U, 
                                     static_cast<unsigned>(TypeMap.size() * 2));
   
+  dumpIterationToFile();
+
   while (!Worklist.empty()) {
     Iteration++;
     LLVM_DEBUG(dbgs() << "Iteration " << Iteration 
@@ -400,6 +459,9 @@ void TypeRecovery::propagate() {
     Worklist = std::move(NextWorklist);
     NextWorklist.clear();
     
+    // Dump iteration state to file
+    dumpIterationToFile();
+    
     // Safety check to prevent infinite loops
     if (Iteration > MaxIterations) {
       LLVM_DEBUG(dbgs() << "Warning: TypeRecovery exceeded " << MaxIterations
@@ -413,25 +475,19 @@ void TypeRecovery::propagate() {
 
 bool TypeRecovery::processValue(Value *V) {
   bool Changed = false;
+
+  // Backward propagation
+  if (isa<Instruction>(V)) {
+    Changed |= propagateBackward(V);
+  }
   
   // Forward propagation: compute types for users
   for (User *U : V->users()) {
     if (auto *I = dyn_cast<Instruction>(U)) {
-      TypeSet NewTypes;
-      computeForwardTypes(I, NewTypes);
-      
-      for (MDNode *MD : NewTypes) {
-        if (addType(I, MD)) {
-          Changed = true;
-          NextWorklist.insert(I);
-        }
-      }
+      // Forward propagation is now done directly in the handlers
+      // Each handler calls addType and inserts into NextWorklist internally
+      Changed |= computeForwardTypes(I);
     }
-  }
-  
-  // Backward propagation
-  if (isa<Instruction>(V)) {
-    propagateBackward(V);
   }
   
   return Changed;
@@ -448,8 +504,7 @@ bool TypeRecovery::addType(Value *V, MDNode *MD) {
 bool TypeRecovery::unionTypes(Value *V, const TypeSet &Other) {
   bool Changed = false;
   for (MDNode *MD : Other) {
-    if (addType(V, MD))
-      Changed = true;
+    Changed |= addType(V, MD);
   }
   return Changed;
 }
@@ -458,68 +513,84 @@ bool TypeRecovery::unionTypes(Value *V, const TypeSet &Other) {
 // Forward Propagation
 //===----------------------------------------------------------------------===//
 
-void TypeRecovery::computeForwardTypes(Instruction *I, TypeSet &Result) {
+bool TypeRecovery::computeForwardTypes(Instruction *I) {
+  bool changed = false;
   if (auto *LI = dyn_cast<LoadInst>(I)) {
-    handleLoad(LI, Result);
+    changed = handleLoad(LI);
   } else if (auto *CI = dyn_cast<CastInst>(I)) {
-    handleCast(CI, Result);
+    changed = handleCast(CI);
   } else if (auto *PHI = dyn_cast<PHINode>(I)) {
-    handlePHI(PHI, Result);
+    changed = handlePHI(PHI);
   } else if (auto *SI = dyn_cast<SelectInst>(I)) {
-    handleSelect(SI, Result);
+    changed = handleSelect(SI);
   } else if (auto *CB = dyn_cast<CallBase>(I)) {
-    handleCall(CB, Result);
+    changed = handleCall(CB);
   } else if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
-    handleGEP(GEP, Result);
+    changed = handleGEP(GEP);
   }
+  return changed;
 }
 
-void TypeRecovery::handleLoad(LoadInst *LI, TypeSet &Result) {
+bool TypeRecovery::handleLoad(LoadInst *LI) {
   // load ptr, ptr %p  =>  result is pointee of %p's pointee type
   // If %p has type "ptr to T", then load result has type "T"
-  // But if T is also a pointer, we need its pointee info
   
   Value *Ptr = LI->getPointerOperand();
   const TypeSet *PtrTypes = getTypeSet(Ptr);
   if (!PtrTypes)
-    return;
+    return false;
   
+  bool Changed = false;
   for (MDNode *PtrMD : *PtrTypes) {
     // PtrMD should be the type of %p (a pointer type)
     // We need the pointee type
     if (MDNode *PointeeMD = getPointeeTypeMD(PtrMD)) {
-      Result.insert(PointeeMD);
-    }
-  }
-}
-
-void TypeRecovery::handleCast(CastInst *CI, TypeSet &Result) {
-  // BitCast, AddrSpaceCast: inherit source types
-  if (!CI->getType()->isPointerTy())
-    return;
-  
-  Value *Src = CI->getOperand(0);
-  const TypeSet *SrcTypes = getTypeSet(Src);
-  if (SrcTypes) {
-    for (MDNode *MD : *SrcTypes) {
-      Result.insert(MD);
-    }
-  }
-}
-
-void TypeRecovery::handlePHI(PHINode *PHI, TypeSet &Result) {
-  // Union of all incoming values
-  for (Value *Inc : PHI->incoming_values()) {
-    const TypeSet *IncTypes = getTypeSet(Inc);
-    if (IncTypes) {
-      for (MDNode *MD : *IncTypes) {
-        Result.insert(MD);
+      if (addType(LI, PointeeMD)) {
+        NextWorklist.insert(LI);
+        Changed = true;
       }
     }
   }
+  return Changed;
 }
 
-void TypeRecovery::handleSelect(SelectInst *SI, TypeSet &Result) {
+bool TypeRecovery::handleCast(CastInst *CI) {
+  // BitCast, AddrSpaceCast: inherit source types
+  if (!CI->getType()->isPointerTy())
+    return false;
+  
+  Value *Src = CI->getOperand(0);
+  if (!Src->getType()->isPointerTy())
+    return false;
+
+  const TypeSet *SrcTypes = getTypeSet(Src);
+  if (SrcTypes) {
+    if (unionTypes(CI, *SrcTypes)) {
+      NextWorklist.insert(CI);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool TypeRecovery::handlePHI(PHINode *PHI) {
+  // Union of all incoming values
+  bool Changed = false;
+  for (Value *Inc : PHI->incoming_values()) {
+    const TypeSet *IncTypes = getTypeSet(Inc);
+    if (IncTypes) {
+      if (unionTypes(PHI, *IncTypes)) {
+        Changed = true;
+      }
+    }
+  }
+  if (Changed) {
+    NextWorklist.insert(PHI);
+  }
+  return Changed;
+}
+
+bool TypeRecovery::handleSelect(SelectInst *SI) {
   // Union of true and false values
   Value *TrueVal = SI->getTrueValue();
   Value *FalseVal = SI->getFalseValue();
@@ -527,46 +598,117 @@ void TypeRecovery::handleSelect(SelectInst *SI, TypeSet &Result) {
   const TypeSet *TrueTypes = getTypeSet(TrueVal);
   const TypeSet *FalseTypes = getTypeSet(FalseVal);
   
+  bool Changed = false;
   if (TrueTypes) {
-    for (MDNode *MD : *TrueTypes)
-      Result.insert(MD);
+    if (unionTypes(SI, *TrueTypes))
+      Changed = true;
   }
   if (FalseTypes) {
-    for (MDNode *MD : *FalseTypes)
-      Result.insert(MD);
+    if (unionTypes(SI, *FalseTypes))
+      Changed = true;
   }
+  if (Changed) {
+    NextWorklist.insert(SI);
+  }
+  return Changed;
 }
 
-void TypeRecovery::handleCall(CallBase *CB, TypeSet &Result) {
-  // Get return type from function's !sigmode.func metadata
+bool TypeRecovery::handleCall(CallBase *CB) {
+  // Get function metadata - either from direct callee or indirect call's func ptr
+  MDNode *FuncMD = nullptr;
   Function *Callee = CB->getCalledFunction();
-  if (!Callee)
-    return;
   
-  MDNode *FuncMD = Callee->getMetadata("sigmode.func");
+  if (Callee) {
+    // Direct call: get metadata from callee function
+    FuncMD = Callee->getMetadata("sigmode.func");
+  } else {
+    // Indirect call: try to get metadata from function pointer's type
+    Value *CalledValue = CB->getCalledOperand();
+    const TypeSet *FuncPtrTypes = getTypeSet(CalledValue);
+    if (FuncPtrTypes && !FuncPtrTypes->empty()) {
+      // Function pointer should have type "ptr to func"
+      // The metadata format is !{ptr undef, !{ret_type, param_types...}}
+      MDNode *FuncPtrMD = *FuncPtrTypes->begin();
+      if (isPointerTypeMD(FuncPtrMD)) {
+        FuncMD = getPointeeTypeMD(FuncPtrMD);
+      }
+    }
+  }
+  
   if (!FuncMD || FuncMD->getNumOperands() < 2)
-    return;
+    return false;
   
-  // Format: !{ptr undef, !{ret_type, param_types...}}
-  auto *TypesMD = dyn_cast<MDNode>(FuncMD->getOperand(1));
+  // Format: !{ptr undef, !{ret_type, param_types...}} for func ptr
+  // Or direct !{ret_type, param_types...} for func type
+  MDNode *TypesMD = nullptr;
+  if (isPointerTypeMD(FuncMD)) {
+    // This is a function pointer metadata, get the pointee (func type)
+    TypesMD = getPointeeTypeMD(FuncMD);
+  } else {
+    // This is already the function type metadata
+    TypesMD = FuncMD;
+  }
+  
   if (!TypesMD || TypesMD->getNumOperands() < 1)
-    return;
+    return false;
+  
+  bool Changed = false;
   
   // First element is return type
   if (auto *RetTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(0))) {
-    Result.insert(RetTypeMD);
+    if (addType(CB, RetTypeMD)) {
+      NextWorklist.insert(CB);
+      Changed = true;
+    }
   }
+  
+  // Propagate parameter types to arguments
+  // Skip the first element (return type), remaining are parameter types
+  unsigned NumParams = TypesMD->getNumOperands() - 1;
+  unsigned NumArgs = CB->arg_size();
+  
+  // Only propagate for non-variadic part (min of formal params and actual args)
+  unsigned PropCount = std::min(NumParams, NumArgs);
+  
+  for (unsigned I = 0; I < PropCount; ++I) {
+    unsigned MDIdx = I + 1;  // +1 to skip return type
+    if (auto *ParamTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
+      Value *Arg = CB->getArgOperand(I);
+      if (addType(Arg, ParamTypeMD)) {
+        NextWorklist.insert(Arg);
+        Changed = true;
+      }
+    }
+  }
+  
+  return Changed;
 }
 
-void TypeRecovery::handleGEP(GetElementPtrInst *GEP, TypeSet &Result) {
+bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
   // GEP computes address of element/field
   // If base is struct*, GEP with constant indices gives field pointer
   
   Value *BasePtr = GEP->getPointerOperand();
+  Type *SourceElemTy = GEP->getSourceElementType();
   const TypeSet *BaseTypes = getTypeSet(BasePtr);
-  if (!BaseTypes)
-    return;
   
+  // Special case: i8 GEP (byte-level pointer arithmetic)
+  // output = getelementptr i8, ptr %p, i64 %offset
+  // The result inherits the base pointer's type
+  if (SourceElemTy->isIntegerTy(8)) {
+    if (BaseTypes) {
+      if (unionTypes(GEP, *BaseTypes)) {
+        NextWorklist.insert(GEP);
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  if (!BaseTypes)
+    return false;
+  
+  bool Changed = false;
   for (MDNode *BaseMD : *BaseTypes) {
     // BaseMD is the type of the base pointer (ptr to something)
     MDNode *PointeeMD = getPointeeTypeMD(BaseMD);
@@ -582,80 +724,101 @@ void TypeRecovery::handleGEP(GetElementPtrInst *GEP, TypeSet &Result) {
       if (auto *FieldIdxCI = dyn_cast<ConstantInt>(*IdxIt)) {
         unsigned FieldIdx = FieldIdxCI->getZExtValue();
         if (MDNode *ResultMD = getStructFieldTypeMD(PointeeMD, FieldIdx)) {
-          // Result is pointer to field type
-          if (ResultMD)
-            Result.insert(ResultMD);
+          // GEP result is a pointer to the field type
+          if (ResultMD && addType(GEP, ResultMD)) {
+            Changed = true;
+          }
         }
       }
     } else if (isArrayTypeMD(PointeeMD)) {
       // Array element access
       if (MDNode *ElemMD = getArrayElementTypeMD(PointeeMD)) {
         MDNode *ResultMD = getOrCreatePtrToTypeMD(ElemMD);
-        if (ResultMD)
-          Result.insert(ResultMD);
+        if (ResultMD && addType(GEP, ResultMD)) {
+          Changed = true;
+        }
       }
     } else {
-      // For other cases, result is still ptr to same pointee type
-      MDNode *ResultMD = BaseMD;
-      if (ResultMD)
-        Result.insert(ResultMD);
+      // For other cases (e.g., single index into base), 
+      // result is still ptr to same pointee type
+      if (addType(GEP, BaseMD)) {
+        Changed = true;
+      }
     }
   }
+  
+  if (Changed) {
+    NextWorklist.insert(GEP);
+  }
+  return Changed;
 }
 
 //===----------------------------------------------------------------------===//
 // Backward Propagation
 //===----------------------------------------------------------------------===//
 
-void TypeRecovery::propagateBackward(Value *V) {
+bool TypeRecovery::propagateBackward(Value *V) {
   auto *I = dyn_cast<Instruction>(V);
   if (!I)
-    return;
+    return false;
   
+  bool changed = false;
   if (auto *LI = dyn_cast<LoadInst>(I)) {
-    backpropLoad(LI);
+    changed = backpropLoad(LI);
   } else if (auto *SI = dyn_cast<StoreInst>(I)) {
-    backpropStore(SI);
+    changed = backpropStore(SI);
   } else if (auto *PHI = dyn_cast<PHINode>(I)) {
-    backpropPHI(PHI);
+    changed = backpropPHI(PHI);
   } else if (auto *Sel = dyn_cast<SelectInst>(I)) {
-    backpropSelect(Sel);
+    changed = backpropSelect(Sel);
+  } else if (auto *CI = dyn_cast<CastInst>(I)) {
+    // Handle addrspacecast and bitcast
+    changed = backpropCast(CI);
+  } else if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
+    // Handle GEP backward propagation
+    changed = backpropGEP(GEP);
   } else if (auto *CB = dyn_cast<CallBase>(I)) {
     // Check if it's memcpy
     Function *Callee = CB->getCalledFunction();
     if (Callee && (Callee->getName().contains("memcpy") ||
                    Callee->getName().contains("memmove"))) {
-      backpropMemcpy(CB);
+      changed = backpropMemcpy(CB);
     }
   }
+
+  return changed;
 }
 
-void TypeRecovery::backpropLoad(LoadInst *LI) {
+bool TypeRecovery::backpropLoad(LoadInst *LI) {
   // %q = load ptr, ptr %p
   // If %q's type is known (T), then %p's type is ptr-to-T
   
   const TypeSet *ResultTypes = getTypeSet(LI);
   if (!ResultTypes || ResultTypes->empty())
-    return;
+    return false;
   
   Value *Ptr = LI->getPointerOperand();
+  bool Changed = false;
   
   for (MDNode *ResultMD : *ResultTypes) {
     // Create ptr-to-ResultMD
     MDNode *PtrTypeMD = getOrCreatePtrToTypeMD(ResultMD);
     if (PtrTypeMD && addType(Ptr, PtrTypeMD)) {
       NextWorklist.insert(Ptr);
+      Changed = true;
     }
   }
+  return Changed;
 }
 
-void TypeRecovery::backpropStore(StoreInst *SI) {
+bool TypeRecovery::backpropStore(StoreInst *SI) {
   // store ptr %val, ptr %dest
   // If %val's type is T, then %dest's type is ptr-to-T
   // If %dest's type is ptr-to-T, then %val's type is T
   
   Value *Val = SI->getValueOperand();
   Value *Dest = SI->getPointerOperand();
+  bool Changed = false;
   
   // Forward: val type -> dest type
   const TypeSet *ValTypes = getTypeSet(Val);
@@ -664,6 +827,7 @@ void TypeRecovery::backpropStore(StoreInst *SI) {
       MDNode *DestMD = getOrCreatePtrToTypeMD(ValMD);
       if (DestMD && addType(Dest, DestMD)) {
         NextWorklist.insert(Dest);
+        Changed = true;
       }
     }
   }
@@ -675,49 +839,58 @@ void TypeRecovery::backpropStore(StoreInst *SI) {
       if (MDNode *PointeeMD = getPointeeTypeMD(DestMD)) {
         if (addType(Val, PointeeMD)) {
           NextWorklist.insert(Val);
+          Changed = true;
         }
       }
     }
   }
+  return Changed;
 }
 
-void TypeRecovery::backpropPHI(PHINode *PHI) {
+bool TypeRecovery::backpropPHI(PHINode *PHI) {
   // If PHI result type is known, propagate to all incoming values
   const TypeSet *PHITypes = getTypeSet(PHI);
   if (!PHITypes || PHITypes->empty())
-    return;
+    return false;
   
+  bool Changed = false;
   for (Value *Inc : PHI->incoming_values()) {
     if (unionTypes(Inc, *PHITypes)) {
       NextWorklist.insert(Inc);
+      Changed = true;
     }
   }
+  return Changed;
 }
 
-void TypeRecovery::backpropSelect(SelectInst *SI) {
+bool TypeRecovery::backpropSelect(SelectInst *SI) {
   // If select result type is known, propagate to true/false values
   const TypeSet *SelTypes = getTypeSet(SI);
   if (!SelTypes || SelTypes->empty())
-    return;
+    return false;
   
   Value *TrueVal = SI->getTrueValue();
   Value *FalseVal = SI->getFalseValue();
   
+  bool Changed = false;
   if (unionTypes(TrueVal, *SelTypes)) {
     NextWorklist.insert(TrueVal);
+    Changed = true;
   }
   if (unionTypes(FalseVal, *SelTypes)) {
     NextWorklist.insert(FalseVal);
+    Changed = true;
   }
+  return Changed;
 }
 
-void TypeRecovery::backpropMemcpy(CallBase *CB) {
+bool TypeRecovery::backpropMemcpy(CallBase *CB) {
   // memcpy(dest, src, len)
   // dest and src should have the same pointee type
   // Merge their types bidirectionally
   
   if (CB->arg_size() < 2)
-    return;
+    return false;
   
   Value *Dest = CB->getArgOperand(0);
   Value *Src = CB->getArgOperand(1);
@@ -725,10 +898,13 @@ void TypeRecovery::backpropMemcpy(CallBase *CB) {
   const TypeSet *DestTypes = getTypeSet(Dest);
   const TypeSet *SrcTypes = getTypeSet(Src);
   
+  bool Changed = false;
+  
   // Merge src types into dest
   if (SrcTypes) {
     if (unionTypes(Dest, *SrcTypes)) {
       NextWorklist.insert(Dest);
+      Changed = true;
     }
   }
   
@@ -736,93 +912,334 @@ void TypeRecovery::backpropMemcpy(CallBase *CB) {
   if (DestTypes) {
     if (unionTypes(Src, *DestTypes)) {
       NextWorklist.insert(Src);
+      Changed = true;
     }
   }
+  return Changed;
+}
+
+bool TypeRecovery::backpropCast(CastInst *CI) {
+  // output = addrspacecast/bitcast input
+  // If output's type is known, propagate to input
+  
+  if (!CI->getType()->isPointerTy())
+    return false;
+  
+  const TypeSet *ResultTypes = getTypeSet(CI);
+  if (!ResultTypes || ResultTypes->empty())
+    return false;
+  
+  Value *Src = CI->getOperand(0);
+  if (Src->getType()->isPointerTy() == false)
+    return false;
+
+  if (unionTypes(Src, *ResultTypes)) {
+    NextWorklist.insert(Src);
+    return true;
+  }
+  return false;
+}
+
+bool TypeRecovery::backpropGEP(GetElementPtrInst *GEP) {
+  // output = getelementptr base, indices
+  // If output's type is known as ptr-to-T, try to infer base's type
+  
+  const TypeSet *ResultTypes = getTypeSet(GEP);
+  if (!ResultTypes || ResultTypes->empty())
+    return false;
+  
+  Value *BasePtr = GEP->getPointerOperand();
+  
+  // For simple GEP (i8 based), output type equals base type
+  // For struct GEP, need more complex inference
+  Type *SourceElemTy = GEP->getSourceElementType();
+  
+  bool Changed = false;
+  if (SourceElemTy->isIntegerTy(8)) {
+    // i8 GEP: base and result have the same type
+    if (unionTypes(BasePtr, *ResultTypes)) {
+      NextWorklist.insert(BasePtr);
+      Changed = true;
+    }
+  } else if (SourceElemTy->isStructTy() && GEP->getNumIndices() >= 2) {
+    // Struct GEP: if result is ptr-to-field, then base is ptr-to-struct
+    // This requires reconstructing struct metadata from field metadata
+    // For now, we skip this complex case
+    // TODO: Implement struct type reconstruction if needed
+  } else if (SourceElemTy->isArrayTy()) {
+    // Array GEP: if result is ptr-to-element, then base is ptr-to-array
+    // Similar complexity as struct
+  } else {
+    // For other cases (simple element access), inherit types
+    if (unionTypes(BasePtr, *ResultTypes)) {
+      NextWorklist.insert(BasePtr);
+      Changed = true;
+    }
+  }
+  return Changed;
 }
 
 //===----------------------------------------------------------------------===//
-// Debug Output
+// Formatting Helpers
 //===----------------------------------------------------------------------===//
 
-void TypeRecovery::dump(raw_ostream &OS) const {
-  OS << "=== Type Recovery Results ===\n";
-  OS << "Total values with types: " << TypeMap.size() << "\n\n";
+std::string TypeRecovery::getCTypeString(MDNode *MD) {
+  if (!MD)
+    return "unknown";
   
-  for (const auto &Entry : TypeMap) {
-    Value *V = Entry.first;
-    const TypeSet &TS = Entry.second;
-    
-    OS << "  ";
-    if (V->hasName())
-      OS << V->getName();
-    else
-      V->printAsOperand(OS, false);
-    
-    OS << " : {";
-    bool First = true;
-    for (MDNode *MD : TS) {
-      if (!First)
-        OS << ", ";
-      First = false;
-      
-      // Print the LLVM type from metadata
-      if (Type *T = getLLVMTypeFromMD(MD)) {
-        T->print(OS);
-      } else {
-        OS << "?";
-      }
-    }
-    OS << "}\n";
+  // Check cache first
+  auto CacheIt = MDToCTypeString.find(MD);
+  if (CacheIt != MDToCTypeString.end())
+    return CacheIt->second;
+  
+  std::string Result;
+  Type *Ty = getLLVMTypeFromMD(MD);
+  
+  if (!Ty) {
+    Result = "unknown";
+    MDToCTypeString[MD] = Result;
+    return Result;
   }
-}
-
-void TypeRecovery::dumpFunction(Function &F, raw_ostream &OS) const {
-  OS << "=== Type Recovery for " << F.getName() << " ===\n";
   
-  // Arguments
-  for (Argument &Arg : F.args()) {
-    const TypeSet *TS = getTypeSet(&Arg);
-    OS << "  Arg " << Arg.getArgNo() << " (";
-    Arg.printAsOperand(OS, false);
-    OS << "): ";
-    
-    if (TS && !TS->empty()) {
-      OS << "{";
-      bool First = true;
-      for (MDNode *MD : *TS) {
-        if (!First) OS << ", ";
-        First = false;
-        if (Type *T = getLLVMTypeFromMD(MD))
-          T->print(OS);
-      }
-      OS << "}";
+  // Pointer type: get pointee type recursively
+  if (Ty->isPointerTy()) {
+    MDNode *PointeeMD = getPointeeTypeMD(MD);
+    if (PointeeMD) {
+      Result = getCTypeString(PointeeMD) + "*";
     } else {
-      OS << "unknown";
+      Result = "void*";
+    }
+  }
+  // Struct type
+  else if (auto *STy = dyn_cast<StructType>(Ty)) {
+    if (STy->hasName()) {
+      StringRef Name = STy->getName();
+      // Remove "struct." prefix if present
+      if (Name.starts_with("struct."))
+        Result = "struct " + Name.substr(7).str();
+      else if (Name.starts_with("class."))
+        Result = "class " + Name.substr(6).str();
+      else if (Name.starts_with("union."))
+        Result = "union " + Name.substr(6).str();
+      else
+        Result = Name.str();
+    } else {
+      Result = "struct (anonymous)";
+    }
+  }
+  // Array type
+  else if (auto *ATy = dyn_cast<ArrayType>(Ty)) {
+    MDNode *ElemMD = getArrayElementTypeMD(MD);
+    std::string ElemStr = ElemMD ? getCTypeString(ElemMD) : "?";
+    Result = ElemStr + "[" + std::to_string(ATy->getNumElements()) + "]";
+  }
+  // Integer types
+  else if (Ty->isIntegerTy()) {
+    unsigned BitWidth = Ty->getIntegerBitWidth();
+    switch (BitWidth) {
+    case 1:  Result = "_Bool"; break;
+    case 8:  Result = "char"; break;
+    case 16: Result = "short"; break;
+    case 32: Result = "int"; break;
+    case 64: Result = "long"; break;
+    default: Result = "int" + std::to_string(BitWidth) + "_t"; break;
+    }
+  }
+  // Floating point types
+  else if (Ty->isFloatTy()) {
+    Result = "float";
+  } else if (Ty->isDoubleTy()) {
+    Result = "double";
+  } else if (Ty->isHalfTy()) {
+    Result = "_Float16";
+  } else if (Ty->isFP128Ty()) {
+    Result = "long double";
+  }
+  // Void
+  else if (Ty->isVoidTy()) {
+    Result = "void";
+  }
+  // Function type
+  else if (auto *FTy = dyn_cast<FunctionType>(Ty)) {
+    // Format: ret_type (*)(param_types...)
+    std::string RetStr;
+    raw_string_ostream OS(RetStr);
+    FTy->getReturnType()->print(OS);
+    Result = OS.str() + " (*)()";  // Simplified
+  }
+  // Vector type
+  else if (auto *VTy = dyn_cast<VectorType>(Ty)) {
+    std::string ElemStr;
+    raw_string_ostream OS(ElemStr);
+    VTy->getElementType()->print(OS);
+    Result = OS.str() + " __attribute__((vector_size(...)))";
+  }
+  // Fallback: use LLVM type string
+  else {
+    raw_string_ostream OS(Result);
+    Ty->print(OS);
+  }
+  
+  MDToCTypeString[MD] = Result;
+  return Result;
+}
+
+std::string TypeRecovery::getSourceLocation(const Instruction *I) {
+  if (!I)
+    return "";
+  
+  if (const DILocation *Loc = I->getDebugLoc()) {
+    std::string Result;
+    raw_string_ostream OS(Result);
+    StringRef Filename = Loc->getFilename();
+    // Get just the filename, not the full path
+    size_t LastSlash = Filename.rfind('/');
+    if (LastSlash != StringRef::npos)
+      Filename = Filename.substr(LastSlash + 1);
+    OS << Filename << ":" << Loc->getLine();
+    return Result;
+  }
+  return "";
+}
+
+std::string TypeRecovery::getSourceLocation(const Value *V) {
+  if (const auto *I = dyn_cast<Instruction>(V))
+    return getSourceLocation(I);
+  return "";
+}
+
+//===----------------------------------------------------------------------===//
+// Iteration Dump
+//===----------------------------------------------------------------------===//
+
+void TypeRecovery::dumpIterationToFile() {
+  ++IterationCount;
+  
+  std::string Filename = "type_recovery_iter_" + std::to_string(IterationCount) + ".txt";
+  std::error_code EC;
+  raw_fd_ostream File(Filename, EC, sys::fs::OF_Text);
+  
+  if (EC) {
+    errs() << "Warning: could not create iteration dump file: " << Filename 
+           << " (" << EC.message() << ")\n";
+    return;
+  }
+  
+  errs() << "TypeRecovery: dumping iteration " << IterationCount 
+         << " to file: " << Filename << "\n";
+  
+  // Use unified dump function
+  dump(File);
+}
+
+//===----------------------------------------------------------------------===//
+// Debug Output (IR-style format)
+//===----------------------------------------------------------------------===//
+
+/// Print type set as space-separated C-style type strings
+void TypeRecovery::printTypeSet(const TypeSet &TS, raw_ostream &OS) {
+  bool First = true;
+  for (MDNode *MD : TS) {
+    if (!First)
+      OS << " ";
+    First = false;
+    OS << getCTypeString(MD);
+  }
+}
+
+void TypeRecovery::dump(raw_ostream &OS) {
+  OS << "; === Type Recovery Results (Iteration " << IterationCount << ") ===\n";
+  OS << "; Total values with types: " << TypeMap.size() << "\n\n";
+  
+  // 1. Global variables
+  OS << "; --- Global Variables ---\n";
+  for (GlobalVariable &GV : Mod.globals()) {
+    // Print global declaration
+    GV.print(OS);
+    OS << "\n";
+    
+    // Print type if available
+    const TypeSet *TS = getTypeSet(&GV);
+    if (TS && !TS->empty()) {
+      OS << "  ; types: ";
+      printTypeSet(*TS, OS);
+      OS << "\n";
     }
     OS << "\n";
   }
   
-  // Instructions
-  for (BasicBlock &BB : F) {
-    for (Instruction &I : BB) {
-      const TypeSet *TS = getTypeSet(&I);
-      if (!TS || TS->empty())
-        continue;
-      
-      OS << "  ";
-      I.printAsOperand(OS, false);
-      OS << " (";
-      OS << I.getOpcodeName();
-      OS << "): {";
-      
-      bool First = true;
-      for (MDNode *MD : *TS) {
-        if (!First) OS << ", ";
-        First = false;
-        if (Type *T = getLLVMTypeFromMD(MD))
-          T->print(OS);
-      }
-      OS << "}\n";
-    }
+  // 2. Functions
+  for (Function &F : Mod) {
+    if (F.isDeclaration())
+      continue;
+    
+    dumpFunction(F, OS);
   }
 }
+
+void TypeRecovery::dumpFunction(Function &F, raw_ostream &OS) {
+  // Print function header
+  OS << "define ";
+  F.getReturnType()->print(OS);
+  OS << " @" << F.getName() << "(";
+  
+  // Print arguments
+  bool FirstArg = true;
+  for (Argument &Arg : F.args()) {
+    if (!FirstArg)
+      OS << ", ";
+    FirstArg = false;
+    Arg.getType()->print(OS);
+    if (Arg.hasName())
+      OS << " %" << Arg.getName();
+    else
+      OS << " %" << Arg.getArgNo();
+  }
+  OS << ") {\n";
+  
+  // Print argument types
+  for (Argument &Arg : F.args()) {
+    const TypeSet *TS = getTypeSet(&Arg);
+    if (TS && !TS->empty()) {
+      OS << "  ; arg ";
+      if (Arg.hasName())
+        OS << "%" << Arg.getName();
+      else
+        OS << "%" << Arg.getArgNo();
+      OS << " types: ";
+      printTypeSet(*TS, OS);
+      OS << "\n";
+    }
+  }
+  
+  // Print each basic block
+  for (BasicBlock &BB : F) {
+    // Print basic block label
+    if (BB.hasName())
+      OS << BB.getName() << ":\n";
+    else
+      OS << "; <label>:\n";
+    
+    // Print each instruction
+    for (Instruction &I : BB) {
+      // Print the instruction
+      OS << "  ";
+      I.print(OS);
+      OS << "\n";
+      
+      // Print type if available (only for instructions that produce values)
+      if (!I.getType()->isVoidTy()) {
+        const TypeSet *TS = getTypeSet(&I);
+        if (TS && !TS->empty()) {
+          OS << "    ; types: ";
+          printTypeSet(*TS, OS);
+          OS << "\n";
+        }
+      }
+    }
+    OS << "\n";
+  }
+  
+  OS << "}\n\n";
+}
+

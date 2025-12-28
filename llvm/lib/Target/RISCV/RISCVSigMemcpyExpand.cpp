@@ -264,18 +264,68 @@ bool RISCVSigMemcpyExpand::isMemsetCall(CallBase *CB) {
   return Name == "memset" || Name.starts_with("llvm.memset");
 }
 
+/// Check if a type metadata is a bare "ptr undef" (no pointee info)
+/// This type is added by TypeRecovery as default for all pointers
+/// and should be ignored when selecting concrete types
+static bool isBarePointerTypeMD(MDNode *MD) {
+  if (!MD || MD->getNumOperands() < 1)
+    return false;
+  
+  auto *CAM = dyn_cast<ConstantAsMetadata>(MD->getOperand(0));
+  if (!CAM)
+    return false;
+  
+  auto *Undef = dyn_cast<UndefValue>(CAM->getValue());
+  if (!Undef)
+    return false;
+  
+  // It's a pointer type with no pointee metadata (only 1 operand)
+  return Undef->getType()->isPointerTy() && MD->getNumOperands() == 1;
+}
+
+/// Filter out bare "ptr undef" types from a type set
+/// Returns the filtered set
+static SmallPtrSet<MDNode *, 4> filterBarePointerTypes(
+    const SmallPtrSet<MDNode *, 4> &Types) {
+  SmallPtrSet<MDNode *, 4> Filtered;
+  for (MDNode *MD : Types) {
+    if (!isBarePointerTypeMD(MD)) {
+      Filtered.insert(MD);
+    }
+  }
+  return Filtered;
+}
+
 Type *RISCVSigMemcpyExpand::selectMemsetType(Value *Dest, uint64_t Size) {
+  // Get source location for better diagnostics
+  std::string SrcLoc = TypeRecovery::getSourceLocation(Dest);
+  std::string LocStr = SrcLoc.empty() ? "" : " at " + SrcLoc;
+  
   // Get recovered types for dest
   const TypeRecovery::TypeSet *DestTypes = TR->getTypeSet(Dest);
   
   if (!DestTypes || DestTypes->empty()) {
-    LLVM_DEBUG(dbgs() << "  No types recovered for memset dest\n");
+    LLVM_DEBUG(dbgs() << "  Warning: No types recovered for memset dest\n");
+    errs() << "Warning: memset destination has no recovered types" << LocStr << "\n";
     return nullptr;
   }
   
-  if (DestTypes->size() == 1) {
+  // Convert to SmallPtrSet and filter out bare ptr undef
+  SmallPtrSet<MDNode *, 4> Types;
+  for (MDNode *MD : *DestTypes)
+    Types.insert(MD);
+  Types = filterBarePointerTypes(Types);
+  
+  if (Types.empty()) {
+    LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memset\n");
+    errs() << "Warning: memset destination has only bare pointer type, no concrete type" 
+           << LocStr << "\n";
+    return nullptr;
+  }
+  
+  if (Types.size() == 1) {
     // Single type - use it
-    MDNode *MD = *DestTypes->begin();
+    MDNode *MD = *Types.begin();
     // Get the pointee type (since dest is a pointer)
     if (MDNode *PointeeMD = TR->getPointeeTypeMD(MD)) {
       return TypeRecovery::getLLVMTypeFromMD(PointeeMD);
@@ -283,17 +333,24 @@ Type *RISCVSigMemcpyExpand::selectMemsetType(Value *Dest, uint64_t Size) {
     return TypeRecovery::getLLVMTypeFromMD(MD);
   }
   
-  // Multiple types - select by size
-  LLVM_DEBUG(dbgs() << "  Multiple types (" << DestTypes->size() 
+  // Multiple types - emit warning with details and select by size
+  LLVM_DEBUG(dbgs() << "  Warning: Multiple types (" << Types.size() 
                     << ") for memset, selecting by size\n");
+  errs() << "Warning: memset has multiple candidate types (" << Types.size() 
+         << ")" << LocStr << ":\n";
+  for (MDNode *MD : Types) {
+    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+  }
+  errs() << "  Selecting best match by size...\n";
   
   Type *BestType = nullptr;
   int64_t BestSizeDiff = INT64_MAX;
   
-  for (MDNode *MD : *DestTypes) {
+  for (MDNode *MD : Types) {
     MDNode *PointeeMD = TR->getPointeeTypeMD(MD);
-    Type *Ty = PointeeMD ? TypeRecovery::getLLVMTypeFromMD(PointeeMD) 
-                         : TypeRecovery::getLLVMTypeFromMD(MD);
+    if (!PointeeMD)
+      continue;
+    Type *Ty = TypeRecovery::getLLVMTypeFromMD(PointeeMD);
     if (!Ty)
       continue;
     
@@ -310,6 +367,9 @@ Type *RISCVSigMemcpyExpand::selectMemsetType(Value *Dest, uint64_t Size) {
   
   if (BestType) {
     LLVM_DEBUG(dbgs() << "  Selected type for memset: " << *BestType << "\n");
+  } else {
+    errs() << "Warning: memset could not determine element type from candidates" 
+           << LocStr << "\n";
   }
   
   return BestType;
@@ -317,6 +377,12 @@ Type *RISCVSigMemcpyExpand::selectMemsetType(Value *Dest, uint64_t Size) {
 
 Type *RISCVSigMemcpyExpand::selectMemcpyType(Value *Dest, Value *Src, 
                                               uint64_t Size) {
+  // Get source location for better diagnostics (prefer dest, then src)
+  std::string SrcLoc = TypeRecovery::getSourceLocation(Dest);
+  if (SrcLoc.empty())
+    SrcLoc = TypeRecovery::getSourceLocation(Src);
+  std::string LocStr = SrcLoc.empty() ? "" : " at " + SrcLoc;
+  
   // Get recovered types for both dest and src
   const TypeRecovery::TypeSet *DestTypes = TR->getTypeSet(Dest);
   const TypeRecovery::TypeSet *SrcTypes = TR->getTypeSet(Src);
@@ -332,8 +398,21 @@ Type *RISCVSigMemcpyExpand::selectMemcpyType(Value *Dest, Value *Src,
       MergedTypes.insert(MD);
   }
   
+  // Check if no types recovered at all
   if (MergedTypes.empty()) {
-    LLVM_DEBUG(dbgs() << "  No types recovered for memcpy src/dest\n");
+    LLVM_DEBUG(dbgs() << "  Warning: No types recovered for memcpy src/dest\n");
+    errs() << "Warning: memcpy source and destination have no recovered types"
+           << LocStr << "\n";
+    return nullptr;
+  }
+  
+  // Filter out bare ptr undef types
+  MergedTypes = filterBarePointerTypes(MergedTypes);
+  
+  if (MergedTypes.empty()) {
+    LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memcpy\n");
+    errs() << "Warning: memcpy source/destination have only bare pointer type, no concrete type"
+           << LocStr << "\n";
     return nullptr;
   }
   
@@ -347,9 +426,15 @@ Type *RISCVSigMemcpyExpand::selectMemcpyType(Value *Dest, Value *Src,
     return TypeRecovery::getLLVMTypeFromMD(MD);
   }
   
-  // Multiple types - select by size
-  LLVM_DEBUG(dbgs() << "  Multiple types (" << MergedTypes.size() 
+  // Multiple types - emit warning with details and select by size
+  LLVM_DEBUG(dbgs() << "  Warning: Multiple types (" << MergedTypes.size() 
                     << ") for memcpy, selecting by size\n");
+  errs() << "Warning: memcpy has multiple candidate types (" << MergedTypes.size() 
+         << ")" << LocStr << ":\n";
+  for (MDNode *MD : MergedTypes) {
+    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+  }
+  errs() << "  Selecting best match by size...\n";
   
   Type *BestType = nullptr;
   int64_t BestSizeDiff = INT64_MAX;
@@ -374,6 +459,9 @@ Type *RISCVSigMemcpyExpand::selectMemcpyType(Value *Dest, Value *Src,
   
   if (BestType) {
     LLVM_DEBUG(dbgs() << "  Selected type: " << *BestType << "\n");
+  } else {
+    errs() << "Warning: memcpy could not determine element type from candidates"
+           << LocStr << "\n";
   }
   
   return BestType;
@@ -782,7 +870,7 @@ Function *RISCVSigMemcpyExpand::getOrCreateMemcpyFunc(Type *ElemTy,
   F->addParamAttr(1, Attribute::ReadOnly);
   
   // Name the arguments
-  auto ArgIt = F->arg_begin();
+  auto *ArgIt = F->arg_begin();
   ArgIt->setName("dest"); ++ArgIt;
   ArgIt->setName("src"); ++ArgIt;
   ArgIt->setName("len");
@@ -804,10 +892,10 @@ void RISCVSigMemcpyExpand::generateMemcpyFuncBody(Function *F, Type *ElemTy,
   BasicBlock *BodyBB = BasicBlock::Create(*Ctx, "body", F);
   BasicBlock *ExitBB = BasicBlock::Create(*Ctx, "exit", F);
   
-  auto ArgIt = F->arg_begin();
-  Value *Dest = &*ArgIt++;
-  Value *Src = &*ArgIt++;
-  Value *Len = &*ArgIt;
+  auto *ArgIt2 = F->arg_begin();
+  Value *Dest = &*ArgIt2++;
+  Value *Src = &*ArgIt2++;
+  Value *Len = &*ArgIt2;
   
   IRBuilder<> Builder(EntryBB);
   
@@ -936,8 +1024,8 @@ static Type *getTypeFromNamedMetadata(Module *M, StringRef MetadataName,
   if (!TypeRegistry)
     return nullptr;
   
-  for (unsigned i = 0; i < TypeRegistry->getNumOperands(); ++i) {
-    MDNode *Entry = TypeRegistry->getOperand(i);
+  for (unsigned I = 0; I < TypeRegistry->getNumOperands(); ++I) {
+    MDNode *Entry = TypeRegistry->getOperand(I);
     if (Entry->getNumOperands() >= 2) {
       // Entry format: !{i64 ID, %Type undef}
       if (auto *IdMD = dyn_cast<ConstantAsMetadata>(Entry->getOperand(0))) {

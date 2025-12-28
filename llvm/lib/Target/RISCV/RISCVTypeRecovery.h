@@ -76,11 +76,14 @@ public:
     return nullptr;
   }
 
-  /// Debug: Dump all recovered types to the given stream
-  void dump(raw_ostream &OS) const;
+  /// Debug: Dump all recovered types to the given stream (IR-style format)
+  void dump(raw_ostream &OS);
 
-  /// Debug: Dump types for a specific function
-  void dumpFunction(Function &F, raw_ostream &OS) const;
+  /// Debug: Dump types for a specific function (IR-style format)
+  void dumpFunction(Function &F, raw_ostream &OS);
+
+  /// Helper: Print a type set as space-separated type strings
+  void printTypeSet(const TypeSet &TS, raw_ostream &OS);
 
   //===--------------------------------------------------------------------===//
   // Type String and Metadata Map Operations
@@ -98,6 +101,10 @@ public:
 
   /// Register a new type metadata with its string representation
   void registerType(MDNode *MD);
+
+  /// Create a basic type metadata: !{type undef}
+  /// Used for registering primitive types (i1, i8, i32, float, etc.)
+  MDNode *createBasicTypeMD(Type *Ty);
 
   //===--------------------------------------------------------------------===//
   // MDNode Helper Functions (using the type map)
@@ -133,6 +140,20 @@ public:
   /// The type is stored as the first operand: undef of that type
   static Type *getLLVMTypeFromMD(MDNode *MD);
 
+  //===--------------------------------------------------------------------===//
+  // Formatting Helpers for Diagnostics
+  //===--------------------------------------------------------------------===//
+
+  /// Get C-style type string from metadata (e.g., "int*", "struct foo*")
+  std::string getCTypeString(MDNode *MD);
+
+  /// Get source location string from an Instruction's debug info
+  /// Returns "file:line" or empty string if no debug info
+  static std::string getSourceLocation(const Instruction *I);
+
+  /// Get source location string from a Value (if it's an Instruction)
+  static std::string getSourceLocation(const Value *V);
+
 private:
   Module &Mod;
   LLVMContext &Ctx;
@@ -148,11 +169,17 @@ private:
   /// Avoids recomputing type string for the same metadata
   DenseMap<MDNode *, std::string> MDToTypeString;
 
+  /// Cache: Map from MDNode to its C-style type string
+  DenseMap<MDNode *, std::string> MDToCTypeString;
+
   /// Current worklist (B)
   DenseSet<Value *> Worklist;
 
   /// Next worklist (C)
   DenseSet<Value *> NextWorklist;
+
+  /// Iteration counter for dump files
+  unsigned IterationCount = 0;
 
   //===--------------------------------------------------------------------===//
   // Initialization (Single Pass)
@@ -174,6 +201,9 @@ private:
   /// Run the iterative propagation until fixpoint
   void propagate();
 
+  /// Dump current type map to a numbered file (iteration_N.txt)
+  void dumpIterationToFile();
+
   /// Process a single value, returns true if types changed
   bool processValue(Value *V);
 
@@ -185,48 +215,57 @@ private:
 
   //===--------------------------------------------------------------------===//
   // Forward Propagation Rules
+  // Each handler directly calls addType and inserts into NextWorklist
+  // Returns true if any types were added
   //===--------------------------------------------------------------------===//
 
   /// Compute forward propagated types for an instruction
-  void computeForwardTypes(Instruction *I, TypeSet &Result);
+  bool computeForwardTypes(Instruction *I);
 
   /// Load: result type is pointee of operand's pointee
-  void handleLoad(LoadInst *LI, TypeSet &Result);
+  bool handleLoad(LoadInst *LI);
 
   /// BitCast/AddrSpaceCast: inherit source types
-  void handleCast(CastInst *CI, TypeSet &Result);
+  bool handleCast(CastInst *CI);
 
   /// PHI: union of all incoming values
-  void handlePHI(PHINode *PHI, TypeSet &Result);
+  bool handlePHI(PHINode *PHI);
 
   /// Select: union of true and false values
-  void handleSelect(SelectInst *SI, TypeSet &Result);
+  bool handleSelect(SelectInst *SI);
 
   /// Call: return type from !sigmode.func metadata
-  void handleCall(CallBase *CI, TypeSet &Result);
+  bool handleCall(CallBase *CI);
 
   /// GEP: compute field type from base struct/array metadata
-  void handleGEP(GetElementPtrInst *GEP, TypeSet &Result);
+  bool handleGEP(GetElementPtrInst *GEP);
 
   //===--------------------------------------------------------------------===//
   // Backward Propagation Rules
+  // Returns true if any types were added
   //===--------------------------------------------------------------------===//
 
   /// Propagate types backward from uses to defs
-  void propagateBackward(Value *V);
+  bool propagateBackward(Value *V);
 
   /// Load: if result type known, infer operand type (ptr to result)
-  void backpropLoad(LoadInst *LI);
+  bool backpropLoad(LoadInst *LI);
 
   /// Store: bidirectional - value and dest inform each other
-  void backpropStore(StoreInst *SI);
+  bool backpropStore(StoreInst *SI);
 
   /// PHI/Select: propagate to incoming values
-  void backpropPHI(PHINode *PHI);
-  void backpropSelect(SelectInst *SI);
+  bool backpropPHI(PHINode *PHI);
+  bool backpropSelect(SelectInst *SI);
 
   /// Memcpy/Memmove: merge src and dest types bidirectionally
-  void backpropMemcpy(CallBase *CI);
+  bool backpropMemcpy(CallBase *CI);
+
+  /// Cast (addrspacecast/bitcast): propagate result type to source
+  bool backpropCast(CastInst *CI);
+
+  /// GEP: propagate result type to base pointer
+  bool backpropGEP(GetElementPtrInst *GEP);
 };
 
 } // end namespace llvm
