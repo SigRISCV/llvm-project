@@ -125,6 +125,9 @@ private:
   // Register a type in the module's sigmemcpy.types metadata and get its ID
   uint64_t registerTypeInMetadata(Type *Ty);
 
+  SmallPtrSet<MDNode *, 4> filterBareAndSimplePointerTypes(
+      const SmallPtrSet<MDNode *, 4> &Types);
+
   //===--------------------------------------------------------------------===//
   // Sigmemcpy functions
   //===--------------------------------------------------------------------===//
@@ -285,11 +288,38 @@ static bool isBarePointerTypeMD(MDNode *MD) {
 
 /// Filter out bare "ptr undef" types from a type set
 /// Returns the filtered set
-static SmallPtrSet<MDNode *, 4> filterBarePointerTypes(
+SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndSimplePointerTypes(
     const SmallPtrSet<MDNode *, 4> &Types) {
+  static MDNode* PtrPtrVoidMD = nullptr;
+  static MDNode* PtrInt8MD = nullptr;
+  if (!PtrPtrVoidMD) {
+    MDNode* PtrVoidMD = TR->lookupTypeByString("ptr_to_void");
+    assert(PtrVoidMD && "ptr_to_void type metadata not found");
+    PtrPtrVoidMD = TR->getOrCreatePtrToTypeMD(PtrVoidMD);
+    assert(PtrPtrVoidMD && "ptr_to_ptr_to_void type metadata not found");
+  }
+
+  if (!PtrInt8MD) {
+    PtrInt8MD = TR->lookupTypeByString("ptr_to_i8");
+    assert(PtrInt8MD && "ptr_to_i8 type metadata not found");
+  }
+
   SmallPtrSet<MDNode *, 4> Filtered;
   for (MDNode *MD : Types) {
-    if (!isBarePointerTypeMD(MD)) {
+    if (!TR->isPointerTypeMD(MD))
+      continue;
+    if (isBarePointerTypeMD(MD))
+      continue;
+    MDNode *PointeeMD = TR->getPointeeTypeMD(MD);
+    while (TR->isArrayTypeMD(PointeeMD)) {
+      PointeeMD = TR->getArrayElementTypeMD(PointeeMD);
+    }
+    Type* LLVMType = TR->getLLVMTypeFromMD(PointeeMD);
+    if (!LLVMType->containsPointer()) {
+      Filtered.insert(PtrInt8MD);
+    } else if (LLVMType->isPointerOnlyType()) {
+      Filtered.insert(PtrPtrVoidMD);
+    } else {
       Filtered.insert(MD);
     }
   }
@@ -303,18 +333,12 @@ Type *RISCVSigMemcpyExpand::selectMemsetType(Value *Dest, uint64_t Size) {
   
   // Get recovered types for dest
   const TypeRecovery::TypeSet *DestTypes = TR->getTypeSet(Dest);
-  
-  if (!DestTypes || DestTypes->empty()) {
-    LLVM_DEBUG(dbgs() << "  Warning: No types recovered for memset dest\n");
-    errs() << "Warning: memset destination has no recovered types" << LocStr << "\n";
-    return nullptr;
-  }
-  
+
   // Convert to SmallPtrSet and filter out bare ptr undef
   SmallPtrSet<MDNode *, 4> Types;
   for (MDNode *MD : *DestTypes)
     Types.insert(MD);
-  Types = filterBarePointerTypes(Types);
+  Types = filterBareAndSimplePointerTypes(Types);
   
   if (Types.empty()) {
     LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memset\n");
@@ -339,6 +363,10 @@ Type *RISCVSigMemcpyExpand::selectMemsetType(Value *Dest, uint64_t Size) {
   errs() << "Warning: memset has multiple candidate types (" << Types.size() 
          << ")" << LocStr << ":\n";
   for (MDNode *MD : Types) {
+    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+  }
+  errs() << "More details on candidate types:\n";
+  for (MDNode *MD : *DestTypes) {
     errs() << "  - " << TR->getCTypeString(MD) << "\n";
   }
   errs() << "  Selecting best match by size...\n";
@@ -388,26 +416,19 @@ Type *RISCVSigMemcpyExpand::selectMemcpyType(Value *Dest, Value *Src,
   const TypeRecovery::TypeSet *SrcTypes = TR->getTypeSet(Src);
   
   // Merge both type sets
+  SmallPtrSet<MDNode *, 4> OldMergedTypes;
   SmallPtrSet<MDNode *, 4> MergedTypes;
   if (DestTypes) {
     for (MDNode *MD : *DestTypes)
-      MergedTypes.insert(MD);
+      OldMergedTypes.insert(MD);
   }
   if (SrcTypes) {
     for (MDNode *MD : *SrcTypes)
-      MergedTypes.insert(MD);
+      OldMergedTypes.insert(MD);
   }
-  
-  // Check if no types recovered at all
-  if (MergedTypes.empty()) {
-    LLVM_DEBUG(dbgs() << "  Warning: No types recovered for memcpy src/dest\n");
-    errs() << "Warning: memcpy source and destination have no recovered types"
-           << LocStr << "\n";
-    return nullptr;
-  }
-  
+
   // Filter out bare ptr undef types
-  MergedTypes = filterBarePointerTypes(MergedTypes);
+  MergedTypes = filterBareAndSimplePointerTypes(OldMergedTypes);
   
   if (MergedTypes.empty()) {
     LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memcpy\n");
@@ -434,6 +455,10 @@ Type *RISCVSigMemcpyExpand::selectMemcpyType(Value *Dest, Value *Src,
   for (MDNode *MD : MergedTypes) {
     errs() << "  - " << TR->getCTypeString(MD) << "\n";
   }
+  errs() << "More details on candidate types:\n";
+  for (MDNode *MD : OldMergedTypes) {
+    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+  } 
   errs() << "  Selecting best match by size...\n";
   
   Type *BestType = nullptr;

@@ -293,6 +293,36 @@ bool Type::containsPointer() const {
   return false;
 }
 
+bool Type::isPointerOnlyType() const {
+  // Direct pointer type
+  if (isPointerTy())
+    return true;
+
+  // Array of pointer-only elements
+  if (const ArrayType *ATy = dyn_cast<ArrayType>(this))
+    return ATy->getElementType()->isPointerOnlyType();
+
+  // Struct where all elements are pointers and tightly packed
+  if (const StructType *STy = dyn_cast<StructType>(this)) {
+
+    for (unsigned I = 0; I < STy->getNumElements(); ++I) {
+      Type *ElemTy = STy->getElementType(I);
+      
+      // Check if element is pointer-only
+      if (!ElemTy->isPointerOnlyType())
+        return false;
+    }
+    
+    return true;
+  }
+
+  // Vector of pointers (rare but possible)
+  if (auto *VTy = dyn_cast<FixedVectorType>(this))
+    return VTy->getElementType()->isPointerOnlyType();
+
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 //                          Primitive 'Type' data
 //===----------------------------------------------------------------------===//
