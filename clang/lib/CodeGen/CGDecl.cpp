@@ -1792,11 +1792,12 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
   // Annotate alloca with pointee type information.
   if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
     if (AllocaAddr.isValid()) {
-      if (ReturnValuePointer.isValid()) {
-        Ty = getContext().getPointerType(Ty);
-      }
-      if (auto *AI = dyn_cast<llvm::AllocaInst>(AllocaAddr.getPointer()))
+      if (auto *AI = dyn_cast<llvm::AllocaInst>(AllocaAddr.getPointer())) {
+        if (NRVO && ReturnValuePointer.isValid()) {
+          Ty = getContext().getPointerType(Ty);
+        }
         PTA->annotateAlloca(AI, Ty);
+      }
     }
   }
 
