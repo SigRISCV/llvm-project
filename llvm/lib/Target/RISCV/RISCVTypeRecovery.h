@@ -130,6 +130,10 @@ public:
   /// Array format: !{[N x T] undef, !element_type}
   MDNode *getArrayElementTypeMD(MDNode *ArrayMD);
 
+  /// Create or get an array of N elements of type T metadata
+  /// Looks up existing in map first, creates if not found
+  MDNode *getOrCreateArrayOfTypeMD(MDNode *ElementMD, uint64_t NumElements);
+
   /// Check if metadata represents a struct type
   static bool isStructTypeMD(MDNode *MD);
 

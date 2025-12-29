@@ -9,7 +9,9 @@
 #include "RISCVTypeRecovery.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
@@ -234,6 +236,38 @@ MDNode *TypeRecovery::getArrayElementTypeMD(MDNode *ArrayMD) {
     return nullptr;
   
   return dyn_cast<MDNode>(ArrayMD->getOperand(1));
+}
+
+MDNode *TypeRecovery::getOrCreateArrayOfTypeMD(MDNode *ElementMD, uint64_t NumElements) {
+  if (!ElementMD)
+    return nullptr;
+  
+  // Build the type string for lookup
+  std::string TypeStr = "arr" + std::to_string(NumElements) + "_of_" + getTypeString(ElementMD);
+  
+  // Check if already exists
+  if (MDNode *Existing = lookupTypeByString(TypeStr))
+    return Existing;
+  
+  // Create new array metadata: !{[N x T] undef, ElementMD}
+  Type *ElemTy = getLLVMTypeFromMD(ElementMD);
+  if (!ElemTy)
+    return nullptr;
+  
+  ArrayType *ArrTy = ArrayType::get(ElemTy, NumElements);
+  UndefValue *ArrUndef = UndefValue::get(ArrTy);
+  
+  Metadata *Ops[] = {
+    ConstantAsMetadata::get(ArrUndef),
+    ElementMD
+  };
+  
+  MDNode *NewMD = MDNode::get(Ctx, Ops);
+  TypeStringToMD[TypeStr] = NewMD;
+  
+  LLVM_DEBUG(dbgs() << "  Created array type: " << TypeStr << "\n");
+  
+  return NewMD;
 }
 
 Type *TypeRecovery::getLLVMTypeFromMD(MDNode *MD) {
@@ -691,6 +725,9 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
   Value *BasePtr = GEP->getPointerOperand();
   Type *SourceElemTy = GEP->getSourceElementType();
   const TypeSet *BaseTypes = getTypeSet(BasePtr);
+
+  if (!BaseTypes)
+    return false;
   
   // Special case: i8 GEP (byte-level pointer arithmetic)
   // output = getelementptr i8, ptr %p, i64 %offset
@@ -705,44 +742,65 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
     return false;
   }
   
-  if (!BaseTypes)
-    return false;
-  
   bool Changed = false;
-  for (MDNode *BaseMD : *BaseTypes) {
-    // BaseMD is the type of the base pointer (ptr to something)
-    MDNode *PointeeMD = getPointeeTypeMD(BaseMD);
-    if (!PointeeMD)
-      continue;
-    
-    // For struct GEP with constant indices, compute field type
-    if (isStructTypeMD(PointeeMD) && GEP->getNumIndices() >= 2) {
-      // First index skips the pointer, second index is struct field
-      auto *IdxIt = GEP->idx_begin();
-      ++IdxIt;  // Skip first index
-      
-      if (auto *FieldIdxCI = dyn_cast<ConstantInt>(*IdxIt)) {
-        unsigned FieldIdx = FieldIdxCI->getZExtValue();
-        if (MDNode *ResultMD = getStructFieldTypeMD(PointeeMD, FieldIdx)) {
-          // GEP result is a pointer to the field type
-          if (ResultMD && addType(GEP, ResultMD)) {
+
+  if (SourceElemTy->isStructTy()) {
+    if (auto *ST = dyn_cast<StructType>(SourceElemTy)) {
+      std::string Result;
+      raw_string_ostream OS(Result);
+      if (ST->hasName()) {
+        // Use struct name, sanitize it
+        StringRef Name = ST->getName();
+        for (char C : Name) {
+          OS << (isalnum(C) ? C : '_');
+        }
+      } else {
+        OS << "anon_struct_" << ST->getNumElements();
+      }
+      MDNode* StructMD = lookupTypeByString(OS.str());
+      MDNode* PtrStructMD = getOrCreatePtrToTypeMD(StructMD);
+      if (StructMD && PtrStructMD) {
+        if (StructMD->getNumOperands() >= 2) {
+          auto *IdxIt = GEP->idx_begin();
+          ++IdxIt;  // Skip first index
+          
+          if (auto *FieldIdxCI = dyn_cast<ConstantInt>(*IdxIt)) {
+            unsigned FieldIdx = FieldIdxCI->getZExtValue();
+            if (MDNode *ResultMD = getStructFieldTypeMD(StructMD, FieldIdx)) {
+              // GEP result is a pointer to the field type
+              if (ResultMD && addType(GEP, ResultMD)) {
+                Changed = true;
+              }
+            }
+          }
+        } else {
+          if (addType(GEP, PtrStructMD)) {
             Changed = true;
           }
         }
       }
-    } else if (isArrayTypeMD(PointeeMD)) {
-      // Array element access
-      if (MDNode *ElemMD = getArrayElementTypeMD(PointeeMD)) {
-        MDNode *ResultMD = getOrCreatePtrToTypeMD(ElemMD);
-        if (ResultMD && addType(GEP, ResultMD)) {
-          Changed = true;
+    }
+  } else if (SourceElemTy->isArrayTy()) {
+    if (auto *AT = dyn_cast<ArrayType>(SourceElemTy)) {
+      for (MDNode *BaseMD : *BaseTypes) {
+        // BaseMD is the type of the base pointer (ptr to something)
+        MDNode *PointeeMD = getPointeeTypeMD(BaseMD);
+        if (PointeeMD && isArrayTypeMD(PointeeMD) &&
+            SourceElemTy == getLLVMTypeFromMD(PointeeMD)) {
+          // Array element access
+          if (GEP->getNumIndices() >= 2) {
+            if (MDNode *ElemMD = getArrayElementTypeMD(PointeeMD)) {
+              MDNode *ResultMD = getOrCreatePtrToTypeMD(ElemMD);
+              if (ResultMD && addType(GEP, ResultMD)) {
+                Changed = true;
+              }
+            }
+          } else {
+            if (addType(GEP, BaseMD)) {
+              Changed = true;
+            }
+          }
         }
-      }
-    } else {
-      // For other cases (e.g., single index into base), 
-      // result is still ptr to same pointee type
-      if (addType(GEP, BaseMD)) {
-        Changed = true;
       }
     }
   }
@@ -941,42 +999,79 @@ bool TypeRecovery::backpropCast(CastInst *CI) {
 }
 
 bool TypeRecovery::backpropGEP(GetElementPtrInst *GEP) {
-  // output = getelementptr base, indices
-  // If output's type is known as ptr-to-T, try to infer base's type
-  
-  const TypeSet *ResultTypes = getTypeSet(GEP);
-  if (!ResultTypes || ResultTypes->empty())
-    return false;
+    // GEP computes address of element/field
+  // If base is struct*, GEP with constant indices gives field pointer
   
   Value *BasePtr = GEP->getPointerOperand();
-  
-  // For simple GEP (i8 based), output type equals base type
-  // For struct GEP, need more complex inference
   Type *SourceElemTy = GEP->getSourceElementType();
+  const TypeSet *GEPSet = getTypeSet(GEP);
+
+  if (!GEPSet)
+    return false;
+  
+  // Special case: i8 GEP (byte-level pointer arithmetic)
+  // output = getelementptr i8, ptr %p, i64 %offset
+  // The result inherits the base pointer's type
+  if (SourceElemTy->isIntegerTy(8)) {
+    if (GEPSet) {
+      if (unionTypes(BasePtr, *GEPSet)) {
+        NextWorklist.insert(BasePtr);
+        return true;
+      }
+    }
+    return false;
+  }
   
   bool Changed = false;
-  if (SourceElemTy->isIntegerTy(8)) {
-    // i8 GEP: base and result have the same type
-    if (unionTypes(BasePtr, *ResultTypes)) {
-      NextWorklist.insert(BasePtr);
-      Changed = true;
+
+  if (SourceElemTy->isStructTy()) {
+    if (auto *ST = dyn_cast<StructType>(SourceElemTy)) {
+      std::string Result;
+      raw_string_ostream OS(Result);
+      if (ST->hasName()) {
+        // Use struct name, sanitize it
+        StringRef Name = ST->getName();
+        for (char C : Name) {
+          OS << (isalnum(C) ? C : '_');
+        }
+      } else {
+        OS << "anon_struct_" << ST->getNumElements();
+      }
+      MDNode* StructMD = lookupTypeByString(OS.str());
+      MDNode* PtrStructMD = getOrCreatePtrToTypeMD(StructMD);
+      if (StructMD && PtrStructMD) {
+        if (addType(BasePtr, PtrStructMD)) {
+          NextWorklist.insert(BasePtr);
+        }
+      }
     }
-  } else if (SourceElemTy->isStructTy() && GEP->getNumIndices() >= 2) {
-    // Struct GEP: if result is ptr-to-field, then base is ptr-to-struct
-    // This requires reconstructing struct metadata from field metadata
-    // For now, we skip this complex case
-    // TODO: Implement struct type reconstruction if needed
   } else if (SourceElemTy->isArrayTy()) {
-    // Array GEP: if result is ptr-to-element, then base is ptr-to-array
-    // Similar complexity as struct
-  } else {
-    // For other cases (simple element access), inherit types
-    if (unionTypes(BasePtr, *ResultTypes)) {
-      NextWorklist.insert(BasePtr);
-      Changed = true;
+    if (auto *AT = dyn_cast<ArrayType>(SourceElemTy)) {
+      for (MDNode *BaseMD : *GEPSet) {
+        // BaseMD is the type of the base pointer (ptr to something)
+        MDNode *PointeeMD = getPointeeTypeMD(BaseMD);
+        if (GEP->getNumIndices() >= 2) {
+          Type* ElemTy = AT->getElementType();
+          if (ElemTy && PointeeMD && getLLVMTypeFromMD(PointeeMD) == ElemTy) {
+            MDNode *ArrayMDNode = getOrCreateArrayOfTypeMD(PointeeMD, AT->getNumElements());
+            MDNode *PtrArrayMD = getOrCreatePtrToTypeMD(ArrayMDNode);
+            if (PtrArrayMD && addType(BasePtr, PtrArrayMD)) {
+              NextWorklist.insert(BasePtr);
+            }
+          }
+        } else {
+          if (PointeeMD && getLLVMTypeFromMD(PointeeMD) == SourceElemTy) {
+            if (addType(BasePtr, BaseMD)) {
+              NextWorklist.insert(BasePtr);
+            }
+          }
+        }
+      }
     }
   }
+
   return Changed;
+
 }
 
 //===----------------------------------------------------------------------===//
