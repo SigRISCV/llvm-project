@@ -10,6 +10,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/Debug.h"
@@ -293,12 +294,13 @@ void TypeRecovery::run() {
   LLVM_DEBUG(dbgs() << "Type map has " << TypeStringToMD.size() << " entries\n");
   
   // Phase 2: Single-pass initialization to collect all typed values
-  initialize();
+  int max_iter = initialize();
   LLVM_DEBUG(dbgs() << "After initialization: " << Worklist.size() 
                     << " values in worklist\n");
+  LLVM_DEBUG(dbgs() << "Max iterations: " << max_iter << "\n");
   
   // Phase 3: Iterative propagation
-  propagate();
+  propagate(max_iter);
   LLVM_DEBUG(dbgs() << "=== TypeRecovery: Completed ===\n");
   LLVM_DEBUG(dump(dbgs()));
 }
@@ -346,11 +348,11 @@ void TypeRecovery::buildTypeMap() {
   }
   
   // Collect from named metadata (sigmemcpy.types, etc.)
-  if (NamedMDNode *TypeRegistry = Mod.getNamedMetadata("sigmemcpy.types")) {
-    for (unsigned I = 0; I < TypeRegistry->getNumOperands(); ++I) {
-      collectMetadataRecursive(TypeRegistry->getOperand(I));
-    }
-  }
+  // if (NamedMDNode *TypeRegistry = Mod.getNamedMetadata("sigmemcpy.types")) {
+  //   for (unsigned I = 0; I < TypeRegistry->getNumOperands(); ++I) {
+  //     collectMetadataRecursive(TypeRegistry->getOperand(I));
+  //   }
+  // }
   
   // Register basic types that may not be annotated by frontend
   // These are needed for type propagation through primitive operations
@@ -377,7 +379,7 @@ void TypeRecovery::buildTypeMap() {
 // Single-Pass Initialization
 //===----------------------------------------------------------------------===//
 
-void TypeRecovery::initialize() {
+int TypeRecovery::initialize() {
   LLVM_DEBUG(dbgs() << "Single-pass initialization...\n");
   
   // Process globals
@@ -388,6 +390,8 @@ void TypeRecovery::initialize() {
     }
   }
   
+  int max_func_IR_num = 0;
+  int func_IR_num = 0;
   // Process functions (in a single pass)
   for (Function &F : Mod) {
     // Process function metadata for arguments
@@ -417,6 +421,13 @@ void TypeRecovery::initialize() {
     // Single pass through all instructions
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
+        if (dyn_cast<CallBase>(&I) || dyn_cast<InvokeInst>(&I) ||
+          dyn_cast<GetElementPtrInst>(&I) || dyn_cast<AllocaInst>(&I) ||
+          dyn_cast<LoadInst>(&I) || dyn_cast<StoreInst>(&I) ||
+          dyn_cast<PHINode>(&I) || dyn_cast<SelectInst>(&I) ||
+          dyn_cast<CastInst>(&I)) {
+          func_IR_num++;
+        }
 
         // Check for sigmode.type metadata (alloca, etc.)
         if (MDNode *MD = I.getMetadata("sigmode.type")) {
@@ -461,21 +472,26 @@ void TypeRecovery::initialize() {
         }
       }
     }
+    if (func_IR_num > max_func_IR_num) {
+      max_func_IR_num = func_IR_num;
+    }
+    func_IR_num = 0;
   }
+
+  return std::max(max_func_IR_num * 2, 100); // set iteration times based on largest function IR size
 }
 
 //===----------------------------------------------------------------------===//
 // Iterative Propagation
 //===----------------------------------------------------------------------===//
 
-void TypeRecovery::propagate() {
+void TypeRecovery::propagate(int max_iteration_time) {
   unsigned Iteration = 0;
   
   // Compute max iterations based on module size
   // Use number of values in TypeMap as a proxy for complexity
   // Each value can be visited at most a few times before converging
-  unsigned MaxIterations = std::max(100U, 
-                                    static_cast<unsigned>(TypeMap.size() * 2));
+  unsigned MaxIterations = max_iteration_time;
   
   dumpIterationToFile();
 

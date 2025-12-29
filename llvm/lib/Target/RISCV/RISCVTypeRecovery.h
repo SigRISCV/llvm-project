@@ -196,14 +196,14 @@ private:
   void collectMetadataRecursive(MDNode *MD);
 
   /// Single-pass initialization: collect all typed values into worklist
-  void initialize();
+  int initialize();
 
   //===--------------------------------------------------------------------===//
   // Propagation
   //===--------------------------------------------------------------------===//
 
   /// Run the iterative propagation until fixpoint
-  void propagate();
+  void propagate(int iteration_time = 100);
 
   /// Dump current type map to a numbered file (iteration_N.txt)
   void dumpIterationToFile();
