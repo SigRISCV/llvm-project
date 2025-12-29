@@ -489,6 +489,10 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
     DI->setLocation(D.getLocation());
     DI->EmitGlobalVariable(var, &D);
   }
+
+  if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
+    PTA->annotateGlobalVariable(var, D.getType());
+  }
 }
 
 namespace {
@@ -1187,6 +1191,10 @@ Address CodeGenModule::createUnnamedGlobalFrom(const VarDecl &D,
     CacheEntry = GV;
   } else if (CacheEntry->getAlignment() < uint64_t(Align.getQuantity())) {
     CacheEntry->setAlignment(Align.getAsAlign());
+  }
+
+  if (PointeeTypeAnnotator *PTA = getPointeeAnnotator()) {
+    PTA->annotateGlobalVariable(CacheEntry, D.getType());
   }
 
   return Address(CacheEntry, CacheEntry->getValueType(), Align);
