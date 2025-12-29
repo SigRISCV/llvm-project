@@ -206,7 +206,7 @@ private:
   void propagate(int iteration_time = 100);
 
   /// Dump current type map to a numbered file (iteration_N.txt)
-  void dumpIterationToFile();
+  void dumpIterationToFile(uint64_t random);
 
   /// Process a single value, returns true if types changed
   bool processValue(Value *V);

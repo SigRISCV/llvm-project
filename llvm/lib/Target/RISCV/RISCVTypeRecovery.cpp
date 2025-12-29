@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <filesystem>
 #include "RISCVTypeRecovery.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -13,6 +14,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
@@ -39,9 +41,15 @@ std::string TypeRecovery::getTypeString(MDNode *MD) {
   raw_string_ostream OS(Result);
   
   // Get the LLVM type from first operand
+
   Type *Ty = getLLVMTypeFromMD(MD);
   if (!Ty) {
-    OS << "unknown";
+    OS << "func(";
+    OS << "ret:" << getTypeString(dyn_cast<MDNode>(MD->getOperand(0)));
+    for (int i = 1; i < MD->getNumOperands(); ++i) {
+      OS << ",arg" << (i - 1) << ":" << getTypeString(dyn_cast<MDNode>(MD->getOperand(i)));
+    }
+    OS << ")";
     MDToTypeString[MD] = Result;
     return Result;
   }
@@ -111,8 +119,9 @@ void TypeRecovery::collectMetadataRecursive(MDNode *MD) {
   if (!MD)
     return;
 
-  if (MDToTypeString.find(MD) != MDToTypeString.end())
-    return; // Already collected
+  std::string TypeStr = getTypeString(MD);
+  if (TypeStringToMD.find(TypeStr) != TypeStringToMD.end())
+    return; // Already registered
   
   // Register this metadata
   registerType(MD);
@@ -298,7 +307,7 @@ void TypeRecovery::run() {
   LLVM_DEBUG(dbgs() << "After initialization: " << Worklist.size() 
                     << " values in worklist\n");
   LLVM_DEBUG(dbgs() << "Max iterations: " << max_iter << "\n");
-  
+
   // Phase 3: Iterative propagation
   propagate(max_iter);
   LLVM_DEBUG(dbgs() << "=== TypeRecovery: Completed ===\n");
@@ -371,6 +380,10 @@ void TypeRecovery::buildTypeMap() {
   
   // Void pointer (ptr without pointee info)
   createBasicTypeMD(PointerType::get(Ctx, 0));
+
+  for (auto &Entry : TypeStringToMD) {
+    errs() << Entry.first() << "\n";
+  }
   
   LLVM_DEBUG(dbgs() << "Type map now has " << TypeStringToMD.size() << " entries\n");
 }
@@ -421,11 +434,10 @@ int TypeRecovery::initialize() {
     // Single pass through all instructions
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
-        if (dyn_cast<CallBase>(&I) || dyn_cast<InvokeInst>(&I) ||
+        if (dyn_cast<CallBase>(&I) || dyn_cast<CastInst>(&I) ||
           dyn_cast<GetElementPtrInst>(&I) || dyn_cast<AllocaInst>(&I) ||
           dyn_cast<LoadInst>(&I) || dyn_cast<StoreInst>(&I) ||
-          dyn_cast<PHINode>(&I) || dyn_cast<SelectInst>(&I) ||
-          dyn_cast<CastInst>(&I)) {
+          dyn_cast<PHINode>(&I) || dyn_cast<SelectInst>(&I)) {
           func_IR_num++;
         }
 
@@ -463,13 +475,14 @@ int TypeRecovery::initialize() {
         // GEP can get type info from struct/array metadata
         if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
           Worklist.insert(GEP);
-          continue;
-        }
-        
-        // Calls can get type info from sigmode.func metadata or func pointer
-        if (auto *CB = dyn_cast<CallBase>(&I)) {
+        } else if (auto *CB = dyn_cast<CallBase>(&I)) {
           Worklist.insert(CB);
+        } else if (auto *LD = dyn_cast<LoadInst>(&I)) {
+          Worklist.insert(LD);
+        } else if (auto *SD = dyn_cast<StoreInst>(&I)) {
+          Worklist.insert(SD);
         }
+
       }
     }
     if (func_IR_num > max_func_IR_num) {
@@ -493,7 +506,8 @@ void TypeRecovery::propagate(int max_iteration_time) {
   // Each value can be visited at most a few times before converging
   unsigned MaxIterations = max_iteration_time;
   
-  dumpIterationToFile();
+  uint64_t random = std::rand();
+  dumpIterationToFile(random);
 
   while (!Worklist.empty()) {
     Iteration++;
@@ -510,7 +524,7 @@ void TypeRecovery::propagate(int max_iteration_time) {
     NextWorklist.clear();
     
     // Dump iteration state to file
-    dumpIterationToFile();
+    dumpIterationToFile(random);
     
     // Safety check to prevent infinite loops
     if (Iteration > MaxIterations) {
@@ -532,11 +546,13 @@ bool TypeRecovery::processValue(Value *V) {
   }
   
   // Forward propagation: compute types for users
-  for (User *U : V->users()) {
-    if (auto *I = dyn_cast<Instruction>(U)) {
-      // Forward propagation is now done directly in the handlers
-      // Each handler calls addType and inserts into NextWorklist internally
-      Changed |= computeForwardTypes(I);
+  if (V->hasUseList()) {
+    for (User *U : V->users()) {
+      if (auto *I = dyn_cast<Instruction>(U)) {
+        // Forward propagation is now done directly in the handlers
+        // Each handler calls addType and inserts into NextWorklist internally
+        Changed |= computeForwardTypes(I);
+      }
     }
   }
   
@@ -1223,10 +1239,15 @@ std::string TypeRecovery::getSourceLocation(const Value *V) {
 // Iteration Dump
 //===----------------------------------------------------------------------===//
 
-void TypeRecovery::dumpIterationToFile() {
+void TypeRecovery::dumpIterationToFile(uint64_t random) {
   ++IterationCount;
+
+  std::filesystem::path dir_path = "recovery_iter";
+  if (!std::filesystem::exists(dir_path)) {
+    std::filesystem::create_directory(dir_path);
+  }
   
-  std::string Filename = "type_recovery_iter_" + std::to_string(IterationCount) + ".txt";
+  std::string Filename = (dir_path / ("type_recovery_iter_" + std::to_string(random) + "_" + std::to_string(IterationCount) + ".txt")).string();
   std::error_code EC;
   raw_fd_ostream File(Filename, EC, sys::fs::OF_Text);
   
