@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include "RISCVTypeRecovery.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -380,10 +381,6 @@ void TypeRecovery::buildTypeMap() {
   
   // Void pointer (ptr without pointee info)
   createBasicTypeMD(PointerType::get(Ctx, 0));
-
-  for (auto &Entry : TypeStringToMD) {
-    errs() << Entry.first() << "\n";
-  }
   
   LLVM_DEBUG(dbgs() << "Type map now has " << TypeStringToMD.size() << " entries\n");
 }
@@ -792,14 +789,15 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
       MDNode* StructMD = lookupTypeByString(OS.str());
       MDNode* PtrStructMD = getOrCreatePtrToTypeMD(StructMD);
       if (StructMD && PtrStructMD) {
-        if (StructMD->getNumOperands() >= 2) {
+        if (GEP->getNumIndices() >= 2) {
           auto *IdxIt = GEP->idx_begin();
           ++IdxIt;  // Skip first index
           
           if (auto *FieldIdxCI = dyn_cast<ConstantInt>(*IdxIt)) {
             unsigned FieldIdx = FieldIdxCI->getZExtValue();
-            if (MDNode *ResultMD = getStructFieldTypeMD(StructMD, FieldIdx)) {
+            if (MDNode *FieldMD = getStructFieldTypeMD(StructMD, FieldIdx)) {
               // GEP result is a pointer to the field type
+              MDNode *ResultMD = getOrCreatePtrToTypeMD(FieldMD);
               if (ResultMD && addType(GEP, ResultMD)) {
                 Changed = true;
               }
