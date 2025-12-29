@@ -293,7 +293,7 @@ SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndSimplePointerTypes(
   static MDNode* PtrPtrVoidMD = nullptr;
   static MDNode* PtrInt8MD = nullptr;
   if (!PtrPtrVoidMD) {
-    MDNode* PtrVoidMD = TR->lookupTypeByString("ptr_to_void");
+    MDNode* PtrVoidMD = TR->lookupTypeByString("ptr");
     assert(PtrVoidMD && "ptr_to_void type metadata not found");
     PtrPtrVoidMD = TR->getOrCreatePtrToTypeMD(PtrVoidMD);
     assert(PtrPtrVoidMD && "ptr_to_ptr_to_void type metadata not found");
