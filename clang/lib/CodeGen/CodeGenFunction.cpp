@@ -3410,6 +3410,8 @@ void CodeGenFunction::addInstToNewSourceAtom(llvm::Instruction *KeyInstruction,
 ///  - The type contains pointers (and is not a union)
 /// Emits warning for union types that contain pointers.
 bool CodeGenFunction::ShouldUseSigMemcpy(Address DestPtr, Address SrcPtr, QualType Ty) {
+  return false;
+
   if (!getContext().getTargetInfo().isSigModeSupported())
     return false;
   
@@ -3524,6 +3526,8 @@ llvm::CallInst* CodeGenFunction::EmitSigMemcpyCall(Address Dest, Address Src,
 ///  - The type contains pointers (and is not a union)
 /// For pointer fields, sigmemset will store xsig_setdummyid(null) instead of 0.
 bool CodeGenFunction::ShouldUseSigMemset(Address DestPtr, QualType Ty) {
+  return false;
+
   if (!getContext().getTargetInfo().isSigModeSupported())
     return false;
   
