@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <cassert>
 #include <filesystem>
 #include "RISCVTypeRecovery.h"
 #include "llvm/ADT/DenseSet.h"
@@ -45,10 +46,11 @@ std::string TypeRecovery::getTypeString(MDNode *MD) {
 
   Type *Ty = getLLVMTypeFromMD(MD);
   if (!Ty) {
-    OS << "func(";
-    OS << "ret:" << getTypeString(dyn_cast<MDNode>(MD->getOperand(0)));
+    OS << getTypeString(dyn_cast<MDNode>(MD->getOperand(0)));
+    OS << " func(";
     for (int i = 1; i < MD->getNumOperands(); ++i) {
-      OS << ",arg" << (i - 1) << ":" << getTypeString(dyn_cast<MDNode>(MD->getOperand(i)));
+      if (i > 1) OS << ", ";
+      OS << getTypeString(dyn_cast<MDNode>(MD->getOperand(i)));
     }
     OS << ")";
     MDToTypeString[MD] = Result;
@@ -57,32 +59,35 @@ std::string TypeRecovery::getTypeString(MDNode *MD) {
   
   // Build type string based on type kind
   if (Ty->isPointerTy()) {
-    OS << "ptr";
     assert(Ty->getPointerAddressSpace() == 0);
     // Include pointee info if available
     if (MD->getNumOperands() >= 2) {
       if (auto *PointeeMD = dyn_cast<MDNode>(MD->getOperand(1))) {
-        OS << "_to_" << getTypeString(PointeeMD);
+        OS << getTypeString(PointeeMD);
       }
+    } else {
+      OS << "void";
     }
+    OS << "*";
   } else if (auto *ST = dyn_cast<StructType>(Ty)) {
     if (ST->hasName()) {
       // Use struct name, sanitize it
       StringRef Name = ST->getName();
       for (char C : Name) {
-        OS << (isalnum(C) ? C : '_');
+        OS << (isalnum(C) ? C : ' ');
       }
     } else {
       OS << "anon_struct_" << ST->getNumElements();
     }
   } else if (auto *AT = dyn_cast<ArrayType>(Ty)) {
-    OS << "arr" << AT->getNumElements();
     // Include element info if available
     if (MD->getNumOperands() >= 2) {
       if (auto *ElemMD = dyn_cast<MDNode>(MD->getOperand(1))) {
-        OS << "_of_" << getTypeString(ElemMD);
+        OS <<  getTypeString(ElemMD);
       }
     }
+
+    OS << "[" << AT->getNumElements() << "]";
   } else if (Ty->isIntegerTy()) {
     OS << "i" << Ty->getIntegerBitWidth();
   } else if (Ty->isFloatTy()) {
@@ -99,6 +104,77 @@ std::string TypeRecovery::getTypeString(MDNode *MD) {
   MDToTypeString[MD] = Result;
   
   return Result;
+}
+
+std::string TypeRecovery::getLLVMTypeString(Type* Ty) {
+  auto CacheIt = LLVMTypeToTypeString.find(Ty);
+  if (CacheIt != LLVMTypeToTypeString.end())
+    return CacheIt->second;
+  
+  // Compute the type string
+  std::string Result;
+  raw_string_ostream OS(Result);
+  
+  // Get the LLVM type from first operand
+
+  if (auto FT = dyn_cast<FunctionType>(Ty)) {
+    OS << getLLVMTypeString(FT->getReturnType());
+    OS << " func(";
+    for (int i = 0; i < FT->getNumParams(); ++i) {
+      if (i > 0) OS << ", ";
+      OS << getLLVMTypeString(FT->getParamType(i));
+    }
+    OS << ")";
+    LLVMTypeToTypeString[Ty] = Result;
+    return Result;
+  }
+  
+  // Build type string based on type kind
+  if (Ty->isPointerTy()) {
+    OS << "void*";
+  } else if (auto *ST = dyn_cast<StructType>(Ty)) {
+    if (ST->hasName()) {
+      // Use struct name, sanitize it
+      StringRef Name = ST->getName();
+      for (char C : Name) {
+        OS << (isalnum(C) ? C : ' ');
+      }
+    } else {
+      OS << "anon_struct_" << ST->getNumElements();
+    }
+  } else if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+    // Include element info if available
+    OS << getLLVMTypeString(AT->getElementType());
+    OS << "[" << AT->getNumElements() << "]";
+  } else if (Ty->isIntegerTy()) {
+    OS << "i" << Ty->getIntegerBitWidth();
+  } else if (Ty->isFloatTy()) {
+    OS << "f32";
+  } else if (Ty->isDoubleTy()) {
+    OS << "f64";
+  } else if (Ty->isVoidTy()) {
+    OS << "void";
+  } else {
+    Ty->print(OS);
+  }
+  
+  // Store in cache
+  LLVMTypeToTypeString[Ty] = Result;
+  
+  return Result;
+}
+
+MDNode* TypeRecovery::getMDFromLLVMTType(Type* Ty) {
+  auto CacheIt = LLVMTypeToMD.find(Ty);
+  if (CacheIt != LLVMTypeToMD.end())
+    return CacheIt->second;
+  
+  std::string TypeStr = getLLVMTypeString(Ty);
+  MDNode *MD = lookupTypeByString(TypeStr);;
+  if (MD) {
+    LLVMTypeToMD[Ty] = MD;
+  }
+  return MD;
 }
 
 void TypeRecovery::registerType(MDNode *MD) {
@@ -170,7 +246,7 @@ MDNode *TypeRecovery::getOrCreatePtrToTypeMD(MDNode *PointeeMD) {
     return nullptr;
   
   // Build the type string for lookup
-  std::string TypeStr = "ptr_to_" + getTypeString(PointeeMD);
+  std::string TypeStr = getTypeString(PointeeMD) + "*";
   
   // Check if already exists
   if (MDNode *Existing = lookupTypeByString(TypeStr))
@@ -254,7 +330,7 @@ MDNode *TypeRecovery::getOrCreateArrayOfTypeMD(MDNode *ElementMD, uint64_t NumEl
     return nullptr;
   
   // Build the type string for lookup
-  std::string TypeStr = "arr" + std::to_string(NumElements) + "_of_" + getTypeString(ElementMD);
+  std::string TypeStr = getTypeString(ElementMD) + "[" + std::to_string(NumElements) + "]";
   
   // Check if already exists
   if (MDNode *Existing = lookupTypeByString(TypeStr))
@@ -395,8 +471,10 @@ int TypeRecovery::initialize() {
   // Process globals
   for (GlobalVariable &GV : Mod.globals()) {
     if (MDNode *MD = GV.getMetadata("sigmode.type")) {
-      addType(&GV, MD);
+      addTypeInitStage(&GV, MD);
       Worklist.insert(&GV);
+    } else {
+      addTypeInitStage(&GV, nullptr);
     }
   }
   
@@ -415,7 +493,7 @@ int TypeRecovery::initialize() {
             unsigned MDIdx = ArgIdx + 1;
             if (MDIdx < TypesMD->getNumOperands()) {
               if (auto *ArgTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
-                addType(&Arg, ArgTypeMD);
+                addTypeInitStage(&Arg, ArgTypeMD);
                 Worklist.insert(&Arg);
               }
             }
@@ -440,7 +518,7 @@ int TypeRecovery::initialize() {
 
         // Check for sigmode.type metadata (alloca, etc.)
         if (MDNode *MD = I.getMetadata("sigmode.type")) {
-          addType(&I, MD);
+          addTypeInitStage(&I, MD);
           Worklist.insert(&I);
           continue;
         }
@@ -452,20 +530,13 @@ int TypeRecovery::initialize() {
           if (OutputTy->isPointerTy() || OutputTy->isIntegerTy() ||
               OutputTy->isFloatTy() || OutputTy->isDoubleTy()) {
             // Look up or create basic type metadata
-            std::string TypeStr;
-            if (OutputTy->isPointerTy()) {
-              TypeStr = "ptr";
-            } else if (OutputTy->isIntegerTy()) {
-              TypeStr = "i" + std::to_string(OutputTy->getIntegerBitWidth());
-            } else if (OutputTy->isFloatTy()) {
-              TypeStr = "f32";
-            } else if (OutputTy->isDoubleTy()) {
-              TypeStr = "f64";
-            }
+            std::string TypeStr = getLLVMTypeString(OutputTy);
             
-            if (MDNode *BasicMD = lookupTypeByString(TypeStr)) {
-              addType(&I, BasicMD);
-            }
+            MDNode *BasicMD = lookupTypeByString(TypeStr);
+            assert(BasicMD && "Failed to find basic type metadata");
+            addTypeInitStage(&I, BasicMD);
+          } else {
+            addTypeInitStage(&I, nullptr); // Non-pointer/non-primitive types
           }
         }
         
@@ -557,11 +628,28 @@ bool TypeRecovery::processValue(Value *V) {
 }
 
 bool TypeRecovery::addType(Value *V, MDNode *MD) {
+  assert(V->getType()->isVoidTy() == false && "Cannot add type to void value");
+
   if (!MD)
     return false;
+
+  if (dyn_cast<Constant>(V)) {
+    return false;
+  } 
   
-  auto &TS = TypeMap[V];
-  return TS.insert(MD).second;  // Returns true if newly inserted
+  auto TSor = TypeMap.find(V);
+  assert((TSor != TypeMap.end()) && "Value not initialized in TypeMap");
+  return TSor->second.insert(MD).second;  // Returns true if newly inserted
+}
+
+bool TypeRecovery::addTypeInitStage(Value *V, MDNode *MD) {
+  auto TSor = TypeMap.find(V);
+  if (TSor == TypeMap.end()) {
+    TypeMap[V] = TypeSet();
+  }
+  if (!MD)
+    return false;
+  return TypeMap[V].insert(MD).second;  // Returns true if newly inserted
 }
 
 bool TypeRecovery::unionTypes(Value *V, const TypeSet &Other) {
@@ -580,6 +668,8 @@ bool TypeRecovery::computeForwardTypes(Instruction *I) {
   bool changed = false;
   if (auto *LI = dyn_cast<LoadInst>(I)) {
     changed = handleLoad(LI);
+  } else if (auto *SI = dyn_cast<StoreInst>(I)) {
+    changed = handleStore(SI);
   } else if (auto *CI = dyn_cast<CastInst>(I)) {
     changed = handleCast(CI);
   } else if (auto *PHI = dyn_cast<PHINode>(I)) {
@@ -587,7 +677,14 @@ bool TypeRecovery::computeForwardTypes(Instruction *I) {
   } else if (auto *SI = dyn_cast<SelectInst>(I)) {
     changed = handleSelect(SI);
   } else if (auto *CB = dyn_cast<CallBase>(I)) {
-    changed = handleCall(CB);
+    Function *Callee = CB->getCalledFunction();
+    if (Callee && (Callee->getName().contains("xsig.setnewid") ||
+                         Callee->getName().contains("xsig.setnewid") || 
+                         Callee->getName().contains("xsig.setrawid"))) {
+      changed = handleSetIDCall(CB);
+    } else if(!Callee) {
+      changed = handleCall(CB);
+    }
   } else if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
     changed = handleGEP(GEP);
   }
@@ -615,6 +712,11 @@ bool TypeRecovery::handleLoad(LoadInst *LI) {
     }
   }
   return Changed;
+}
+
+bool TypeRecovery::handleStore(StoreInst *SI) {
+  NextWorklist.insert(SI);
+  return true;
 }
 
 bool TypeRecovery::handleCast(CastInst *CI) {
@@ -677,73 +779,19 @@ bool TypeRecovery::handleSelect(SelectInst *SI) {
 }
 
 bool TypeRecovery::handleCall(CallBase *CB) {
-  // Get function metadata - either from direct callee or indirect call's func ptr
-  MDNode *FuncMD = nullptr;
-  Function *Callee = CB->getCalledFunction();
-  
-  if (Callee) {
-    // Direct call: get metadata from callee function
-    FuncMD = Callee->getMetadata("sigmode.func");
-  } else {
-    // Indirect call: try to get metadata from function pointer's type
-    Value *CalledValue = CB->getCalledOperand();
-    const TypeSet *FuncPtrTypes = getTypeSet(CalledValue);
-    if (FuncPtrTypes && !FuncPtrTypes->empty()) {
-      // Function pointer should have type "ptr to func"
-      // The metadata format is !{ptr undef, !{ret_type, param_types...}}
-      MDNode *FuncPtrMD = *FuncPtrTypes->begin();
-      if (isPointerTypeMD(FuncPtrMD)) {
-        FuncMD = getPointeeTypeMD(FuncPtrMD);
-      }
-    }
-  }
-  
-  if (!FuncMD || FuncMD->getNumOperands() < 2)
-    return false;
-  
-  // Format: !{ptr undef, !{ret_type, param_types...}} for func ptr
-  // Or direct !{ret_type, param_types...} for func type
-  MDNode *TypesMD = nullptr;
-  if (isPointerTypeMD(FuncMD)) {
-    // This is a function pointer metadata, get the pointee (func type)
-    TypesMD = getPointeeTypeMD(FuncMD);
-  } else {
-    // This is already the function type metadata
-    TypesMD = FuncMD;
-  }
-  
-  if (!TypesMD || TypesMD->getNumOperands() < 1)
-    return false;
-  
+  // memcpy(dest, src, size)
+  NextWorklist.insert(CB);
+  return true;
+}
+
+bool TypeRecovery::handleSetIDCall(CallBase *CB) {
+  const TypeSet* SrcTypes = getTypeSet(CB->getArgOperand(0));
+  Value* Dest = CB;
+
   bool Changed = false;
-  
-  // First element is return type
-  if (auto *RetTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(0))) {
-    if (addType(CB, RetTypeMD)) {
-      NextWorklist.insert(CB);
-      Changed = true;
-    }
+  if (unionTypes(Dest, *SrcTypes)) {
+    Changed = true;
   }
-  
-  // Propagate parameter types to arguments
-  // Skip the first element (return type), remaining are parameter types
-  unsigned NumParams = TypesMD->getNumOperands() - 1;
-  unsigned NumArgs = CB->arg_size();
-  
-  // Only propagate for non-variadic part (min of formal params and actual args)
-  unsigned PropCount = std::min(NumParams, NumArgs);
-  
-  for (unsigned I = 0; I < PropCount; ++I) {
-    unsigned MDIdx = I + 1;  // +1 to skip return type
-    if (auto *ParamTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
-      Value *Arg = CB->getArgOperand(I);
-      if (addType(Arg, ParamTypeMD)) {
-        NextWorklist.insert(Arg);
-        Changed = true;
-      }
-    }
-  }
-  
   return Changed;
 }
 
@@ -775,18 +823,7 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
 
   if (SourceElemTy->isStructTy()) {
     if (auto *ST = dyn_cast<StructType>(SourceElemTy)) {
-      std::string Result;
-      raw_string_ostream OS(Result);
-      if (ST->hasName()) {
-        // Use struct name, sanitize it
-        StringRef Name = ST->getName();
-        for (char C : Name) {
-          OS << (isalnum(C) ? C : '_');
-        }
-      } else {
-        OS << "anon_struct_" << ST->getNumElements();
-      }
-      MDNode* StructMD = lookupTypeByString(OS.str());
+      MDNode* StructMD = getMDFromLLVMTType(ST);
       MDNode* PtrStructMD = getOrCreatePtrToTypeMD(StructMD);
       if (StructMD && PtrStructMD) {
         if (GEP->getNumIndices() >= 2) {
@@ -871,6 +908,12 @@ bool TypeRecovery::propagateBackward(Value *V) {
     if (Callee && (Callee->getName().contains("memcpy") ||
                    Callee->getName().contains("memmove"))) {
       changed = backpropMemcpy(CB);
+    } else if (Callee && (Callee->getName().contains("xsig.setnewid") ||
+                         Callee->getName().contains("xsig.setnewid") || 
+                         Callee->getName().contains("xsig.setrawid"))) {
+      changed = backpropSetIDCall(CB);
+    } else {
+      changed = backpropCall(CB);
     }
   }
 
@@ -972,6 +1015,77 @@ bool TypeRecovery::backpropSelect(SelectInst *SI) {
   return Changed;
 }
 
+bool TypeRecovery::backpropCall(CallBase *CB) {
+  // Get function metadata - either from direct callee or indirect call's func ptr
+  MDNode *FuncMD = nullptr;
+  Function *Callee = CB->getCalledFunction();
+  
+  if (Callee) {
+    // Direct call: get metadata from callee function
+    FuncMD = Callee->getMetadata("sigmode.func");
+  } else {
+    // Indirect call: try to get metadata from function pointer's type
+    Value *CalledValue = CB->getCalledOperand();
+    const TypeSet *FuncPtrTypes = getTypeSet(CalledValue);
+    if (FuncPtrTypes && !FuncPtrTypes->empty()) {
+      // Function pointer should have type "ptr to func"
+      // The metadata format is !{ptr undef, !{ret_type, param_types...}}
+      MDNode *FuncPtrMD = *FuncPtrTypes->begin();
+      if (isPointerTypeMD(FuncPtrMD)) {
+        FuncMD = getPointeeTypeMD(FuncPtrMD);
+      }
+    }
+  }
+  
+  if (!FuncMD || FuncMD->getNumOperands() < 2)
+    return false;
+  
+  // Format: !{ptr undef, !{ret_type, param_types...}} for func ptr
+  // Or direct !{ret_type, param_types...} for func type
+  MDNode *TypesMD = nullptr;
+  if (isPointerTypeMD(FuncMD)) {
+    // This is a function pointer metadata, get the pointee (func type)
+    TypesMD = getPointeeTypeMD(FuncMD);
+  } else {
+    // This is already the function type metadata
+    TypesMD = FuncMD;
+  }
+  
+  if (!TypesMD || TypesMD->getNumOperands() < 1)
+    return false;
+  
+  bool Changed = false;
+  
+  // First element is return type
+  if (auto *RetTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(0))) {
+    if (!CB->getType()->isVoidTy() && addType(CB, RetTypeMD)) {
+      NextWorklist.insert(CB);
+      Changed = true;
+    }
+  }
+  
+  // Propagate parameter types to arguments
+  // Skip the first element (return type), remaining are parameter types
+  unsigned NumParams = TypesMD->getNumOperands() - 1;
+  unsigned NumArgs = CB->arg_size();
+  
+  // Only propagate for non-variadic part (min of formal params and actual args)
+  unsigned PropCount = std::min(NumParams, NumArgs);
+  
+  for (unsigned I = 0; I < PropCount; ++I) {
+    unsigned MDIdx = I + 1;  // +1 to skip return type
+    if (auto *ParamTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
+      Value *Arg = CB->getArgOperand(I);
+      if (addType(Arg, ParamTypeMD)) {
+        NextWorklist.insert(Arg);
+        Changed = true;
+      }
+    }
+  }
+  
+  return Changed;
+}
+
 bool TypeRecovery::backpropMemcpy(CallBase *CB) {
   // memcpy(dest, src, len)
   // dest and src should have the same pointee type
@@ -1002,6 +1116,18 @@ bool TypeRecovery::backpropMemcpy(CallBase *CB) {
       NextWorklist.insert(Src);
       Changed = true;
     }
+  }
+  return Changed;
+}
+
+bool TypeRecovery::backpropSetIDCall(CallBase *CB) {
+  const TypeSet* DestTypes = getTypeSet(CB);
+  Value* Src = CB->getArgOperand(0);
+
+  bool Changed = false;
+  if (unionTypes(Src, *DestTypes)) {
+    NextWorklist.insert(Src);
+    Changed = true;
   }
   return Changed;
 }
@@ -1056,18 +1182,7 @@ bool TypeRecovery::backpropGEP(GetElementPtrInst *GEP) {
 
   if (SourceElemTy->isStructTy()) {
     if (auto *ST = dyn_cast<StructType>(SourceElemTy)) {
-      std::string Result;
-      raw_string_ostream OS(Result);
-      if (ST->hasName()) {
-        // Use struct name, sanitize it
-        StringRef Name = ST->getName();
-        for (char C : Name) {
-          OS << (isalnum(C) ? C : '_');
-        }
-      } else {
-        OS << "anon_struct_" << ST->getNumElements();
-      }
-      MDNode* StructMD = lookupTypeByString(OS.str());
+      MDNode* StructMD = getMDFromLLVMTType(ST);
       MDNode* PtrStructMD = getOrCreatePtrToTypeMD(StructMD);
       if (StructMD && PtrStructMD) {
         if (addType(BasePtr, PtrStructMD)) {
@@ -1107,107 +1222,6 @@ bool TypeRecovery::backpropGEP(GetElementPtrInst *GEP) {
 //===----------------------------------------------------------------------===//
 // Formatting Helpers
 //===----------------------------------------------------------------------===//
-
-std::string TypeRecovery::getCTypeString(MDNode *MD) {
-  if (!MD)
-    return "unknown";
-  
-  // Check cache first
-  auto CacheIt = MDToCTypeString.find(MD);
-  if (CacheIt != MDToCTypeString.end())
-    return CacheIt->second;
-  
-  std::string Result;
-  Type *Ty = getLLVMTypeFromMD(MD);
-  
-  if (!Ty) {
-    Result = "unknown";
-    MDToCTypeString[MD] = Result;
-    return Result;
-  }
-  
-  // Pointer type: get pointee type recursively
-  if (Ty->isPointerTy()) {
-    MDNode *PointeeMD = getPointeeTypeMD(MD);
-    if (PointeeMD) {
-      Result = getCTypeString(PointeeMD) + "*";
-    } else {
-      Result = "void*";
-    }
-  }
-  // Struct type
-  else if (auto *STy = dyn_cast<StructType>(Ty)) {
-    if (STy->hasName()) {
-      StringRef Name = STy->getName();
-      // Remove "struct." prefix if present
-      if (Name.starts_with("struct."))
-        Result = "struct " + Name.substr(7).str();
-      else if (Name.starts_with("class."))
-        Result = "class " + Name.substr(6).str();
-      else if (Name.starts_with("union."))
-        Result = "union " + Name.substr(6).str();
-      else
-        Result = Name.str();
-    } else {
-      Result = "struct (anonymous)";
-    }
-  }
-  // Array type
-  else if (auto *ATy = dyn_cast<ArrayType>(Ty)) {
-    MDNode *ElemMD = getArrayElementTypeMD(MD);
-    std::string ElemStr = ElemMD ? getCTypeString(ElemMD) : "?";
-    Result = ElemStr + "[" + std::to_string(ATy->getNumElements()) + "]";
-  }
-  // Integer types
-  else if (Ty->isIntegerTy()) {
-    unsigned BitWidth = Ty->getIntegerBitWidth();
-    switch (BitWidth) {
-    case 1:  Result = "_Bool"; break;
-    case 8:  Result = "char"; break;
-    case 16: Result = "short"; break;
-    case 32: Result = "int"; break;
-    case 64: Result = "long"; break;
-    default: Result = "int" + std::to_string(BitWidth) + "_t"; break;
-    }
-  }
-  // Floating point types
-  else if (Ty->isFloatTy()) {
-    Result = "float";
-  } else if (Ty->isDoubleTy()) {
-    Result = "double";
-  } else if (Ty->isHalfTy()) {
-    Result = "_Float16";
-  } else if (Ty->isFP128Ty()) {
-    Result = "long double";
-  }
-  // Void
-  else if (Ty->isVoidTy()) {
-    Result = "void";
-  }
-  // Function type
-  else if (auto *FTy = dyn_cast<FunctionType>(Ty)) {
-    // Format: ret_type (*)(param_types...)
-    std::string RetStr;
-    raw_string_ostream OS(RetStr);
-    FTy->getReturnType()->print(OS);
-    Result = OS.str() + " (*)()";  // Simplified
-  }
-  // Vector type
-  else if (auto *VTy = dyn_cast<VectorType>(Ty)) {
-    std::string ElemStr;
-    raw_string_ostream OS(ElemStr);
-    VTy->getElementType()->print(OS);
-    Result = OS.str() + " __attribute__((vector_size(...)))";
-  }
-  // Fallback: use LLVM type string
-  else {
-    raw_string_ostream OS(Result);
-    Ty->print(OS);
-  }
-  
-  MDToCTypeString[MD] = Result;
-  return Result;
-}
 
 std::string TypeRecovery::getSourceLocation(const Instruction *I) {
   if (!I)
@@ -1273,7 +1287,7 @@ void TypeRecovery::printTypeSet(const TypeSet &TS, raw_ostream &OS) {
     if (!First)
       OS << " ";
     First = false;
-    OS << getCTypeString(MD);
+    OS << getTypeString(MD);
   }
 }
 

@@ -92,6 +92,8 @@ public:
   /// Get a unique string representation of a type metadata
   /// Uses cache for efficiency - computes once, stores in MDToTypeString
   std::string getTypeString(MDNode *MD);
+  std::string getLLVMTypeString(Type* type);
+  MDNode* getMDFromLLVMTType(Type* type);
 
   /// Look up metadata by type string, returns nullptr if not found
   MDNode *lookupTypeByString(StringRef TypeStr) const {
@@ -148,9 +150,6 @@ public:
   // Formatting Helpers for Diagnostics
   //===--------------------------------------------------------------------===//
 
-  /// Get C-style type string from metadata (e.g., "int*", "struct foo*")
-  std::string getCTypeString(MDNode *MD);
-
   /// Get source location string from an Instruction's debug info
   /// Returns "file:line" or empty string if no debug info
   static std::string getSourceLocation(const Instruction *I);
@@ -172,9 +171,8 @@ private:
   /// Cache: Map from MDNode to its type string
   /// Avoids recomputing type string for the same metadata
   DenseMap<MDNode *, std::string> MDToTypeString;
-
-  /// Cache: Map from MDNode to its C-style type string
-  DenseMap<MDNode *, std::string> MDToCTypeString;
+  DenseMap<Type *, std::string> LLVMTypeToTypeString;
+  DenseMap<Type*, MDNode *> LLVMTypeToMD;
 
   /// Current worklist (B)
   DenseSet<Value *> Worklist;
@@ -213,6 +211,7 @@ private:
 
   /// Add a type to a value's type set, returns true if new
   bool addType(Value *V, MDNode *MD);
+  bool addTypeInitStage(Value *V, MDNode *MD);
 
   /// Union another type set into a value's set, returns true if changed
   bool unionTypes(Value *V, const TypeSet &Other);
@@ -229,6 +228,9 @@ private:
   /// Load: result type is pointee of operand's pointee
   bool handleLoad(LoadInst *LI);
 
+  /// Store: bidirectional - value and dest inform each other
+  bool handleStore(StoreInst *SI);
+
   /// BitCast/AddrSpaceCast: inherit source types
   bool handleCast(CastInst *CI);
 
@@ -238,11 +240,13 @@ private:
   /// Select: union of true and false values
   bool handleSelect(SelectInst *SI);
 
-  /// Call: return type from !sigmode.func metadata
-  bool handleCall(CallBase *CI);
-
   /// GEP: compute field type from base struct/array metadata
   bool handleGEP(GetElementPtrInst *GEP);
+
+  /// setid func: llvm.riscv.xsig.setdummyid/setrawid/setnewid
+  bool handleSetIDCall(CallBase *CI);
+
+  bool handleCall(CallBase *CI);
 
   //===--------------------------------------------------------------------===//
   // Backward Propagation Rules
@@ -265,11 +269,17 @@ private:
   /// Memcpy/Memmove: merge src and dest types bidirectionally
   bool backpropMemcpy(CallBase *CI);
 
+  /// setid func: propagate pointer type to argument
+  bool backpropSetIDCall(CallBase *CI);
+
   /// Cast (addrspacecast/bitcast): propagate result type to source
   bool backpropCast(CastInst *CI);
 
   /// GEP: propagate result type to base pointer
   bool backpropGEP(GetElementPtrInst *GEP);
+
+  /// Call: return type from !sigmode.func metadata
+  bool backpropCall(CallBase *CI);
 };
 
 } // end namespace llvm

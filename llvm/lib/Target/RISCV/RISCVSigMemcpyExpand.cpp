@@ -293,14 +293,14 @@ SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndSimplePointerTypes(
   static MDNode* PtrPtrVoidMD = nullptr;
   static MDNode* PtrInt8MD = nullptr;
   if (!PtrPtrVoidMD) {
-    MDNode* PtrVoidMD = TR->lookupTypeByString("ptr");
+    MDNode* PtrVoidMD = TR->lookupTypeByString("void*");
     assert(PtrVoidMD && "ptr_to_void type metadata not found");
     PtrPtrVoidMD = TR->getOrCreatePtrToTypeMD(PtrVoidMD);
     assert(PtrPtrVoidMD && "ptr_to_ptr_to_void type metadata not found");
   }
 
   if (!PtrInt8MD) {
-    PtrInt8MD = TR->lookupTypeByString("ptr_to_i8");
+    PtrInt8MD = TR->lookupTypeByString("i8*");
     assert(PtrInt8MD && "ptr_to_i8 type metadata not found");
   }
 
@@ -363,11 +363,11 @@ Type *RISCVSigMemcpyExpand::selectMemsetType(Value *Dest, uint64_t Size) {
   errs() << "Warning: memset has multiple candidate types (" << Types.size() 
          << ")" << LocStr << ":\n";
   for (MDNode *MD : Types) {
-    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+    errs() << "  - " << TR->getTypeString(MD) << "\n";
   }
   errs() << "More details on candidate types:\n";
   for (MDNode *MD : *DestTypes) {
-    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+    errs() << "  - " << TR->getTypeString(MD) << "\n";
   }
   errs() << "  Selecting best match by size...\n";
   
@@ -453,11 +453,11 @@ Type *RISCVSigMemcpyExpand::selectMemcpyType(Value *Dest, Value *Src,
   errs() << "Warning: memcpy has multiple candidate types (" << MergedTypes.size() 
          << ")" << LocStr << ":\n";
   for (MDNode *MD : MergedTypes) {
-    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+    errs() << "  - " << TR->getTypeString(MD) << "\n";
   }
   errs() << "More details on candidate types:\n";
   for (MDNode *MD : OldMergedTypes) {
-    errs() << "  - " << TR->getCTypeString(MD) << "\n";
+    errs() << "  - " << TR->getTypeString(MD) << "\n";
   } 
   errs() << "  Selecting best match by size...\n";
   
