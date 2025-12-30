@@ -29,6 +29,7 @@
 #define LLVM_CLANG_LIB_CODEGEN_POINTEETYPEANNOTATOR_H
 
 #include "clang/AST/Type.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "CGCall.h"
 #include "llvm/ADT/DenseMap.h"
@@ -96,10 +97,13 @@ private:
   /// Cache of type metadata to avoid duplicate creation.
   /// Maps canonical QualType to MDNode.
   llvm::DenseMap<const void *, llvm::MDNode *> TypeMetadataCache;
+  llvm::DenseMap<llvm::Type*, QualType> LLVMTypeToQualType;
 
   /// Create metadata for basic types (int, char, float, etc.)
   /// Format: !{llvm_type undef}
   llvm::MDNode *createBasicTypeMD(llvm::Type *LLVMTy);
+  llvm::MDNode *createLLVMTypeMD(llvm::Type *LLVMTy);
+  QualType getQualTypeFromLLVMType(llvm::Type *LLVMTy);
 
   /// Create metadata for pointer types.
   /// Format: !{ptr undef, !pointee_type}

@@ -14,7 +14,9 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/TypeBase.h"
+#include "clang/Basic/LLVM.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -26,7 +28,30 @@ using namespace clang;
 using namespace CodeGen;
 
 PointeeTypeAnnotator::PointeeTypeAnnotator(CodeGenModule &CGM)
-    : CGM(CGM), Ctx(CGM.getLLVMContext()), M(CGM.getModule()) {}
+    : CGM(CGM), Ctx(CGM.getLLVMContext()), M(CGM.getModule()) {
+  CanQualType type_list[] = {
+    CGM.getContext().VoidTy,
+    CGM.getContext().BoolTy,
+    CGM.getContext().FloatTy,
+    CGM.getContext().DoubleTy,
+    CGM.getContext().CharTy,
+    CGM.getContext().ShortTy,
+    CGM.getContext().IntTy,
+    CGM.getContext().LongTy,
+    CGM.getContext().LongLongTy,
+    CGM.getContext().UnsignedCharTy,
+    CGM.getContext().UnsignedShortTy,
+    CGM.getContext().UnsignedIntTy,
+    CGM.getContext().UnsignedLongTy,
+    CGM.getContext().UnsignedLongLongTy,
+    CGM.getContext().VoidPtrTy
+  };
+
+  for (CanQualType Ty : type_list) {
+    getTypeMetadata(Ty);
+    LLVMTypeToQualType[getLLVMType(Ty)] = Ty;
+  }
+}
 
 bool PointeeTypeAnnotator::isEnabled() const {
   return CGM.getContext().getTargetInfo().isSigModeSupported();
@@ -121,6 +146,26 @@ llvm::MDNode *PointeeTypeAnnotator::createBasicTypeMD(llvm::Type *LLVMTy) {
   return llvm::MDNode::get(Ctx, Ops);
 }
 
+QualType PointeeTypeAnnotator::getQualTypeFromLLVMType(llvm::Type *LLVMTy) {
+  QualType Result;
+  if (auto AT = dyn_cast<llvm::ArrayType>(LLVMTy)) {
+    llvm::Type* ElementTy = AT->getElementType();
+    QualType ElemQTy = getQualTypeFromLLVMType(ElementTy);
+    Result = CGM.getContext().getConstantArrayType(
+        ElemQTy, llvm::APInt(AT->getNumElements(), 0), nullptr, ArraySizeModifier::Normal, 0);
+  } else {
+    auto It = LLVMTypeToQualType.find(LLVMTy);
+    assert(It != LLVMTypeToQualType.end());
+    Result = It->second;
+  }
+  return Result;
+}
+
+llvm::MDNode *PointeeTypeAnnotator::createLLVMTypeMD(llvm::Type *LLVMTy) {
+  QualType Result = getQualTypeFromLLVMType(LLVMTy);
+  return getTypeMetadata(Result);
+}
+
 //===----------------------------------------------------------------------===//
 // Pointer Type Metadata
 //===----------------------------------------------------------------------===//
@@ -189,6 +234,7 @@ llvm::MDNode *PointeeTypeAnnotator::createRecordTypeMD(const RecordType *RT) {
   QualType RecordQTy(RT, 0);
   llvm::Type *LLVMTy = getLLVMType(RecordQTy);
   llvm::UndefValue *StructUndef = llvm::UndefValue::get(LLVMTy);
+  LLVMTypeToQualType[LLVMTy] = RecordQTy;
 
   // Collect field type metadata
   llvm::SmallVector<llvm::Metadata *, 16> FieldMDs;
@@ -357,6 +403,7 @@ void PointeeTypeAnnotator::annotateAlloca(llvm::AllocaInst *AI, QualType Ty) {
 void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata *, 16>& ArgsMDs,
   QualType argtype, const ABIArgInfo &arginfo) {
   argtype = argtype.getCanonicalType();
+  llvm::MDNode *NodeMD = getTypeMetadata(argtype); // Ensure type metadata is created
   
   switch (arginfo.getKind()) {
     case ABIArgInfo::Indirect:
@@ -375,11 +422,10 @@ void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata 
       llvm::Type *CoerceTy = arginfo.getCoerceToType();
       if (CoerceTy && CoerceTy != getLLVMType(argtype)) {
         // There's a coercion - create metadata for the coerced LLVM type
-        llvm::MDNode *NodeMD = createBasicTypeMD(CoerceTy);
+        llvm::MDNode *NodeMD = createLLVMTypeMD(CoerceTy);
         if (NodeMD)
           ArgsMDs.push_back(NodeMD);
       } else {
-        llvm::MDNode *NodeMD = getTypeMetadata(argtype);
         if (NodeMD)
           ArgsMDs.push_back(NodeMD);
       }
@@ -425,7 +471,6 @@ void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata 
         }
       } else {
         // Fallback to direct annotation for scalars
-        llvm::MDNode *NodeMD = getTypeMetadata(argtype);
         if (NodeMD)
           ArgsMDs.push_back(NodeMD);
       }
@@ -439,7 +484,7 @@ void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata 
         // Get the unpacked elements (skip padding elements)
         llvm::ArrayRef<llvm::Type *> UnpackedTypes = arginfo.getCoerceAndExpandTypeSequence();
         for (llvm::Type *ElemTy : UnpackedTypes) {
-          llvm::MDNode *NodeMD = createBasicTypeMD(ElemTy);
+          llvm::MDNode *NodeMD = createLLVMTypeMD(ElemTy);
           if (NodeMD)
             ArgsMDs.push_back(NodeMD);
         }
@@ -456,7 +501,6 @@ void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata 
             annotateFunctionArg(ArgsMDs, FieldTy, DirectInfo);
           }
         } else {
-          llvm::MDNode *NodeMD = getTypeMetadata(argtype);
           if (NodeMD)
             ArgsMDs.push_back(NodeMD);
         }
@@ -466,7 +510,6 @@ void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata 
     case ABIArgInfo::TargetSpecific: {
       // TargetSpecific: handled by target-specific hooks
       // For now, treat as direct
-      llvm::MDNode *NodeMD = getTypeMetadata(argtype);
       if (NodeMD)
         ArgsMDs.push_back(NodeMD);
       break;
@@ -504,9 +547,6 @@ void PointeeTypeAnnotator::annotateFunction(llvm::Function *F, QualType FuncTy,
       QualType voidtype = CGM.getContext().VoidTy;
       ArgsMDs.push_back(getTypeMetadata(voidtype));
     }
-    DEBUG_FILE << F->getName() << "\n";
-    DEBUG_FILE << RetTy.getAsString() << "\n";
-    DEBUG_FILE << (uint64_t)(RetInfo.getKind()) << "\n";
 
     // Process return type
     annotateFunctionArg(ArgsMDs, RetTy, RetInfo);
