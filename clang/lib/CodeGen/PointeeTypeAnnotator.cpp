@@ -20,6 +20,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/Debug.h"
+#include <cstdint>
 
 using namespace clang;
 using namespace CodeGen;
@@ -40,6 +41,9 @@ const void *PointeeTypeAnnotator::getTypeCacheKey(QualType Ty) const {
 }
 
 llvm::Type *PointeeTypeAnnotator::getLLVMType(QualType Ty) const {
+  if (Ty->isVoidType()) {
+    return llvm::Type::getVoidTy(Ctx);
+  }
   return CGM.getTypes().ConvertType(Ty);
 }
 
@@ -265,7 +269,7 @@ llvm::MDNode *PointeeTypeAnnotator::createFunctionTypeMD(const FunctionType *FT)
   const ABIArgInfo &RetInfo = FI->getReturnInfo();
   
   // If return is indirect (sret), first element is void, then sret pointer type
-  if (RetInfo.isIndirect()) {
+  if (RetInfo.isIndirect() || RetInfo.getKind() == ABIArgInfo::Ignore) {
     TypeMDs.push_back(getTypeMetadata(CGM.getContext().VoidTy));
   }
   annotateFunctionArg(TypeMDs, RetTy, RetInfo);
@@ -500,6 +504,9 @@ void PointeeTypeAnnotator::annotateFunction(llvm::Function *F, QualType FuncTy,
       QualType voidtype = CGM.getContext().VoidTy;
       ArgsMDs.push_back(getTypeMetadata(voidtype));
     }
+    DEBUG_FILE << F->getName() << "\n";
+    DEBUG_FILE << RetTy.getAsString() << "\n";
+    DEBUG_FILE << (uint64_t)(RetInfo.getKind()) << "\n";
 
     // Process return type
     annotateFunctionArg(ArgsMDs, RetTy, RetInfo);

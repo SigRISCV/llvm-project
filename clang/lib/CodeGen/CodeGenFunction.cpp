@@ -1372,12 +1372,11 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
     // Get function type from the function declaration
     QualType FuncTy;
-    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(CurFuncDecl)) {
+    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(CurFuncDecl)) {
       FuncTy = FD->getType();
-    }
-    if (!FuncTy.isNull()) {
       PTA->annotateFunction(CurFn, FuncTy, *CurFnInfo);
     }
+    
   }
 }
 
