@@ -495,7 +495,7 @@ void PointeeTypeAnnotator::annotateFunction(llvm::Function *F, QualType FuncTy,
     
     QualType RetTy = FuncTy->getAs<FunctionType>()->getReturnType();
     const ABIArgInfo &RetInfo = FI.getReturnInfo();
-    if (RetInfo.isIndirect()) {
+    if (RetInfo.isIndirect() || RetInfo.getKind() == ABIArgInfo::Ignore) {
       // sret: return value is passed as an indirect pointer argument
       QualType voidtype = CGM.getContext().VoidTy;
       ArgsMDs.push_back(getTypeMetadata(voidtype));
