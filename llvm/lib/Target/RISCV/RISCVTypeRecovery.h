@@ -144,7 +144,7 @@ public:
 
   /// Get the LLVM Type from a type metadata node
   /// The type is stored as the first operand: undef of that type
-  static Type *getLLVMTypeFromMD(MDNode *MD);
+  Type *getLLVMTypeFromMD(MDNode *MD);
 
   //===--------------------------------------------------------------------===//
   // Formatting Helpers for Diagnostics

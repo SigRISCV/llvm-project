@@ -17,6 +17,7 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -139,6 +140,14 @@ llvm::MDNode *PointeeTypeAnnotator::getPointeeMetadata(QualType Ty) {
 
 llvm::MDNode *PointeeTypeAnnotator::createBasicTypeMD(llvm::Type *LLVMTy) {
   // Format: !{llvm_type undef}
+  if (LLVMTy->isVoidTy()) {
+    llvm::Type* Int1Ty = llvm::Type::getInt1Ty(Ctx);
+    llvm::Constant* VoidValue = llvm::Constant::getNullValue(Int1Ty);
+    llvm::Metadata *Ops[] = {
+        llvm::ConstantAsMetadata::get(VoidValue)
+    };
+    return llvm::MDNode::get(Ctx, Ops);
+  }
   llvm::UndefValue *Undef = llvm::UndefValue::get(LLVMTy);
   llvm::Metadata *Ops[] = {
       llvm::ConstantAsMetadata::get(Undef)

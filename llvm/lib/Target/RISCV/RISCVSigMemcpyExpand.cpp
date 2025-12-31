@@ -326,7 +326,7 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
     // Single type - use it
     MDNode *MD = *Types.begin();
     // Get the pointee type (since dest is a pointer)
-    return TypeRecovery::getLLVMTypeFromMD(MD);
+    return TR->getLLVMTypeFromMD(MD);
   }
   
   // Multiple types - emit warning with details and select by size
@@ -348,7 +348,7 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
   for (MDNode *PointeeMD : Types) {
     if (!PointeeMD)
       continue;
-    Type *Ty = TypeRecovery::getLLVMTypeFromMD(PointeeMD);
+    Type *Ty = TR->getLLVMTypeFromMD(PointeeMD);
     if (!Ty)
       continue;
     

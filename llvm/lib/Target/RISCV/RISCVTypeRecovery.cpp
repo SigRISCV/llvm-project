@@ -364,6 +364,11 @@ Type *TypeRecovery::getLLVMTypeFromMD(MDNode *MD) {
   auto *CAM = dyn_cast<ConstantAsMetadata>(MD->getOperand(0));
   if (!CAM)
     return nullptr;
+
+  Constant* Value = CAM->getValue();
+  if (Value->isNullValue()) {
+    return llvm::Type::getVoidTy(Ctx);
+  }
   
   return CAM->getValue()->getType();
 }
