@@ -9059,6 +9059,13 @@ static AssignConvertType checkPointerTypesForAssignment(Sema &S,
     rhq.addRaw();
   }
 
+  if (rhq.hasRaw() && !lhq.hasRaw()) {
+    // Assigning from a raw pointer to a qualified pointer is not allowed.
+    DEBUG_FILE << LHSType.getAsString() << "\n";
+    DEBUG_FILE << RHSType.getAsString() << "\n";
+    return AssignConvertType::Incompatible;
+  }
+
   if (!lhq.compatiblyIncludes(rhq, S.getASTContext())) {
     // Treat address-space mismatches as fatal.
     if (!lhq.isAddressSpaceSupersetOf(rhq, S.getASTContext()))
