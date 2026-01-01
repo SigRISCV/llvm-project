@@ -206,7 +206,7 @@ void RISCVSigMemcpyExpand::runTypeRecovery() {
 ///    it's an alloca cast to AS100 - real AS is AS100
 /// 2. If ptr comes from other addrspacecast: use the source AS
 /// 3. Otherwise, use the direct AS
-static unsigned getRealAddressSpace(Value *Ptr) {
+static Value* getRealPtr(Value *Ptr) {
   // Look for addrspacecast
   if (auto *ASC = dyn_cast<AddrSpaceCastInst>(Ptr)) {
     // Check if this is an alloca-generated cast (marked with .ascast_alloca suffix)
@@ -214,15 +214,15 @@ static unsigned getRealAddressSpace(Value *Ptr) {
     // This means the real storage is in AS0 (alloca space)
     if (ASC->hasName() && ASC->getName().contains(".ascast_alloca")) {
       // alloca cast to AS100 - real AS is AS100
-      return 100;
+      return Ptr;
     }
     
     // For other addrspacecasts, use source AS
-    return ASC->getOperand(0)->getType()->getPointerAddressSpace();
+    return ASC->getOperand(0);
   }
   
   // No cast, use direct AS
-  return Ptr->getType()->getPointerAddressSpace();
+  return Ptr;
 }
 
 bool RISCVSigMemcpyExpand::isMemcpyCall(CallBase *CB) {
@@ -674,12 +674,12 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
   Value *LenVal = II->getArgOperand(2);
   
   // Get address spaces
+  if (II->getCalledFunction()->getName() == "memcpy") {
+    Dest = getRealPtr(Dest);
+    Src = getRealPtr(Src);
+  }
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
   unsigned SrcAS = Src->getType()->getPointerAddressSpace();
-  if (II->getCalledFunction()->getName() == "memcpy") {
-    DestAS = getRealAddressSpace(Dest);
-    SrcAS = getRealAddressSpace(Src);
-  }
 
   LLVM_DEBUG(dbgs() << "Expanding sigmemcpy: dest AS=" << DestAS 
                     << ", src AS=" << SrcAS << "\n");
@@ -695,7 +695,6 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
     }
     ElemTy = selectMemcpyType(II, Dest, Src, len);
     if (!ElemTy) {
-      DEBUG_FILE;
       IsRawToRaw = true;
     } else {
       HasPointers = ElemTy->containsPointer();
@@ -707,11 +706,11 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
   if (IsRawToRaw || !HasPointers) {
     LLVM_DEBUG(dbgs() << "  Using llvm.memcpy (raw-to-raw=" << IsRawToRaw 
                       << ", has_pointers=" << HasPointers << ")\n");
-    emitMemcpyCall(Builder, Dest, Src, LenVal, DestAS, SrcAS);
+    return false;
   } else {
     // Need to generate helper function for pointer re-signing
-    DEBUG_FILE << "  Using sigmemcpy helper function for type: " << *ElemTy << "\n";
-    DEBUG_FILE << "  Length value: " << *LenVal << "\n";
+    LLVM_DEBUG(dbgs() << "  Using sigmemcpy helper function for type: " << *ElemTy << "\n");
+    LLVM_DEBUG(dbgs() << "  Length value: " << *LenVal << "\n");
     if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
       uint64_t bytelen = LenCI->getZExtValue();
       uint64_t elementsize = bytelen / DL->getTypeAllocSize(ElemTy);
@@ -723,13 +722,12 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
     }
     Function *HelperF = getOrCreateMemcpyFunc(ElemTy, DestAS, SrcAS);
     Builder.CreateCall(HelperF, {Dest, Src, LenVal});
+
+    // Remove the original intrinsic call
+    II->eraseFromParent();
+    NumMemcpyExpanded++;
+    return true;
   }
-  
-  // Remove the original intrinsic call
-  II->eraseFromParent();
-  NumMemcpyExpanded++;
-  
-  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -923,13 +921,13 @@ void RISCVSigMemcpyExpand::zeroElementInFunc(IRBuilder<> &Builder,
 
 bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
   Value *Dest = II->getArgOperand(0);
-  Value *LenVal = II->getArgOperand(1);
+  Value *LenVal = II->getArgOperand(2);
   
   // Get address space
-  unsigned DestAS = Dest->getType()->getPointerAddressSpace();
   if (II->getCalledFunction()->getName() == "memset") {
-    DestAS = getRealAddressSpace(Dest);
+    Dest = getRealPtr(Dest);
   }
+  unsigned DestAS = Dest->getType()->getPointerAddressSpace();
 
   LLVM_DEBUG(dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n");
   
@@ -944,7 +942,6 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
     }
     ElemTy = selectMemsetType(II, Dest, len);
     if (!ElemTy) {
-      DEBUG_FILE;
       IsRawToRaw = true;
     } else {
       HasPointers = ElemTy->containsPointer();
@@ -959,8 +956,8 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
     emitMemsetCall(Builder, Dest, LenVal, DestAS);
   } else {
     // Need to generate helper function for proper pointer zeroing
-    DEBUG_FILE << "  Using sigmemset helper function for type: " << *ElemTy << "\n";
-    DEBUG_FILE << "  Length value: " << *LenVal << "\n";
+    LLVM_DEBUG(dbgs() << "  Using sigmemset helper function for type: " << *ElemTy << "\n");
+    LLVM_DEBUG(dbgs() << "  Length value: " << *LenVal << "\n");
     if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
       uint64_t bytelen = LenCI->getZExtValue();
       uint64_t elementsize = bytelen / (uint64_t)DL->getTypeAllocSize(ElemTy);
@@ -1025,8 +1022,8 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   LLVM_DEBUG(dbgs() << "=== Phase 2: Expand SigMemcpy/SigMemset ===\n");
   
   // Collect all sigmemcpy and sigmemset calls (including newly converted ones)
-  SmallVector<IntrinsicInst *, 16> SigMemcpyCalls;
-  SmallVector<IntrinsicInst *, 16> SigMemsetCalls;
+  SmallVector<CallInst *, 16> SigMemcpyCalls;
+  SmallVector<CallInst *, 16> SigMemsetCalls;
   
   for (Function &F : M) {
     if (F.isDeclaration())
@@ -1034,9 +1031,12 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
     
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
-        if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
+        if (auto *II = dyn_cast<CallInst>(&I)) {
           // Check by intrinsic name since it's an overloaded intrinsic
-          StringRef Name = II->getCalledFunction()->getName();
+          Function* call_func = II->getCalledFunction();
+          if (!call_func)
+            continue;
+          StringRef Name = call_func->getName();
           if (Name.starts_with("llvm.memcpy") || Name == "memcpy") {
             SigMemcpyCalls.push_back(II);
           } else if (Name.starts_with("llvm.memset") || Name == "memset") {
@@ -1051,12 +1051,12 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   LLVM_DEBUG(dbgs() << "Found " << SigMemsetCalls.size() << " sigmemset calls\n");
   
   // Expand each sigmemcpy call
-  for (IntrinsicInst *II : SigMemcpyCalls) {
+  for (CallInst *II : SigMemcpyCalls) {
     Changed |= expandSigMemcpy(II);
   }
   
   // Expand each sigmemset call
-  for (IntrinsicInst *II : SigMemsetCalls) {
+  for (CallInst *II : SigMemsetCalls) {
     Changed |= expandSigMemset(II);
   }
   
