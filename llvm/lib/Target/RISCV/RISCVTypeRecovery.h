@@ -54,7 +54,7 @@ public:
   explicit TypeRecovery(Module &M) : Mod(M), Ctx(M.getContext()) {}
 
   /// Run type recovery on the module
-  void run();
+  void run(SmallVector<Function*, 0> FunctionsToProcess);
 
   /// Get the recovered type set for a value
   const TypeSet *getTypeSet(Value *V) const {
@@ -194,7 +194,7 @@ private:
   void collectMetadataRecursive(MDNode *MD);
 
   /// Single-pass initialization: collect all typed values into worklist
-  int initialize();
+  int initialize(SmallVector<Function*, 0> FunctionsToProcess);
 
   //===--------------------------------------------------------------------===//
   // Propagation

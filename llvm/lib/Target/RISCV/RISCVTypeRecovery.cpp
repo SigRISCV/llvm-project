@@ -378,7 +378,7 @@ Type *TypeRecovery::getLLVMTypeFromMD(MDNode *MD) {
 // Main Entry Point
 //===----------------------------------------------------------------------===//
 
-void TypeRecovery::run() {
+void TypeRecovery::run(SmallVector<Function*, 0> FunctionsToProcess) {
   LLVM_DEBUG(dbgs() << "=== TypeRecovery: Starting type recovery ===\n");
   
   // Phase 1: Build type string -> MDNode map from all metadata
@@ -386,7 +386,7 @@ void TypeRecovery::run() {
   LLVM_DEBUG(dbgs() << "Type map has " << TypeStringToMD.size() << " entries\n");
   
   // Phase 2: Single-pass initialization to collect all typed values
-  int max_iter = initialize();
+  int max_iter = initialize(FunctionsToProcess);
   LLVM_DEBUG(dbgs() << "After initialization: " << Worklist.size() 
                     << " values in worklist\n");
   LLVM_DEBUG(dbgs() << "Max iterations: " << max_iter << "\n");
@@ -471,7 +471,7 @@ void TypeRecovery::buildTypeMap() {
 // Single-Pass Initialization
 //===----------------------------------------------------------------------===//
 
-int TypeRecovery::initialize() {
+int TypeRecovery::initialize(SmallVector<Function*, 0> FunctionsToProcess) {
   LLVM_DEBUG(dbgs() << "Single-pass initialization...\n");
   
   // Process globals
@@ -487,15 +487,15 @@ int TypeRecovery::initialize() {
   int max_func_IR_num = 0;
   int func_IR_num = 0;
   // Process functions (in a single pass)
-  for (Function &F : Mod) {
+  for (Function* F : FunctionsToProcess) {
     // Process function metadata for arguments
-    if (MDNode *FuncMD = F.getMetadata("sigmode.func")) {
+    if (MDNode *FuncMD = F->getMetadata("sigmode.func")) {
       if (FuncMD->getNumOperands() >= 2) {
         auto *TypesMD = dyn_cast<MDNode>(FuncMD->getOperand(1));
         if (TypesMD) {
           // Skip index 0 (return type), process argument types
           unsigned ArgIdx = 0;
-          for (Argument &Arg : F.args()) {
+          for (Argument &Arg : F->args()) {
             unsigned MDIdx = ArgIdx + 1;
             if (MDIdx < TypesMD->getNumOperands()) {
               if (auto *ArgTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
@@ -509,11 +509,11 @@ int TypeRecovery::initialize() {
       }
     }
     
-    if (F.isDeclaration())
+    if (F->isDeclaration())
       continue;
     
     // Single pass through all instructions
-    for (BasicBlock &BB : F) {
+    for (BasicBlock &BB : *F) {
       for (Instruction &I : BB) {
         if (dyn_cast<CallBase>(&I) || dyn_cast<CastInst>(&I) ||
           dyn_cast<GetElementPtrInst>(&I) || dyn_cast<AllocaInst>(&I) ||
@@ -646,7 +646,9 @@ bool TypeRecovery::addType(Value *V, MDNode *MD) {
   } 
   
   auto TSor = TypeMap.find(V);
-  assert((TSor != TypeMap.end()) && "Value not initialized in TypeMap");
+  if (TSor == TypeMap.end()) {
+    return false;
+  }
   return TSor->second.insert(MD).second;  // Returns true if newly inserted
 }
 

@@ -100,7 +100,7 @@ private:
   //===--------------------------------------------------------------------===//
   
   // Run type recovery on the module
-  void runTypeRecovery();
+  void runTypeRecovery(SmallVector<Function*, 0> FunctionsToProcess);
   
   // Check if a call is a memcpy/memmove that needs conversion
   bool isMemcpyCall(CallBase *CB);
@@ -191,10 +191,10 @@ INITIALIZE_PASS(RISCVSigMemcpyExpand, DEBUG_TYPE,
 // Type Recovery and Memcpy Conversion
 //===----------------------------------------------------------------------===//
 
-void RISCVSigMemcpyExpand::runTypeRecovery() {
+void RISCVSigMemcpyExpand::runTypeRecovery(SmallVector<Function*, 0> FunctionsToProcess) {
   TR = std::make_unique<TypeRecovery>(*Mod);
-  TR->run();
-  
+  TR->run(FunctionsToProcess);
+
   LLVM_DEBUG(dbgs() << "Type recovery completed\n");
   LLVM_DEBUG(TR->dump(dbgs()));
 }
@@ -1012,9 +1012,6 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   
   LLVM_DEBUG(dbgs() << "=== Phase 1: Type Recovery ===\n");
   
-  // Run type recovery to infer types for all values
-  runTypeRecovery();
-  
   //===--------------------------------------------------------------------===//
   // Phase 2: Collect and Expand SigMemcpy/SigMemset Intrinsics
   //===--------------------------------------------------------------------===//
@@ -1025,10 +1022,12 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   SmallVector<CallInst *, 16> SigMemcpyCalls;
   SmallVector<CallInst *, 16> SigMemsetCalls;
   
+  SmallVector<Function*, 0> FunctionsToProcess;
   for (Function &F : M) {
     if (F.isDeclaration())
       continue;
     
+    bool HasSigMemcpyOrMemset = false;
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
         if (auto *II = dyn_cast<CallInst>(&I)) {
@@ -1039,16 +1038,30 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
           StringRef Name = call_func->getName();
           if (Name.starts_with("llvm.memcpy") || Name == "memcpy") {
             SigMemcpyCalls.push_back(II);
+            HasSigMemcpyOrMemset = true;
           } else if (Name.starts_with("llvm.memset") || Name == "memset") {
             SigMemsetCalls.push_back(II);
+            HasSigMemcpyOrMemset = true;
           }
         }
       }
+    }
+
+    if (HasSigMemcpyOrMemset) {
+      FunctionsToProcess.push_back(&F);
     }
   }
   
   LLVM_DEBUG(dbgs() << "Found " << SigMemcpyCalls.size() << " sigmemcpy calls\n");
   LLVM_DEBUG(dbgs() << "Found " << SigMemsetCalls.size() << " sigmemset calls\n");
+
+  if (SigMemcpyCalls.empty() && SigMemsetCalls.empty()) {
+    LLVM_DEBUG(dbgs() << "No sigmemcpy or sigmemset calls found, skipping expansion\n");
+    return false;
+  }
+
+  // Run type recovery to infer types for all values
+  runTypeRecovery(FunctionsToProcess);
   
   // Expand each sigmemcpy call
   for (CallInst *II : SigMemcpyCalls) {
