@@ -307,6 +307,10 @@ def ext_designated_init_brace_elision : ExtWarn<
   InGroup<C99Designator>, SFINAEFailure;
 
 // Declarations.
+def err_sig_func_with_raw_attr : Error<
+  "sig function param cannot be qualified by 'raw'">;
+def err_struct_without_raw_attr : Error<
+  "struct field cannot be qualified by 'raw'">;
 def err_pointee_need_raw_attr : Error<
   "the pointee type %0 contained pointers must be qualified by 'raw'">;
 def ext_plain_complex : ExtWarn<

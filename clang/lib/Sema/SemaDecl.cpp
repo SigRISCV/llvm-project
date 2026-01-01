@@ -10062,6 +10062,20 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
                                               isVirtualOkay);
   if (!NewFD) return nullptr;
 
+  if (Context.getTargetInfo().isSigModeSupported()) {
+    QualType RetType = R->getAs<FunctionType>()->getReturnType();
+    if (!RetType.isRawQualified()) {
+      if (const FunctionProtoType *FPT = R->getAs<FunctionProtoType>()) {
+        for (const auto &ParamTy : FPT->param_types()) {
+          if (ParamTy.isRawQualified()) {
+            Diag(D.getIdentifierLoc(), diag::err_sig_func_with_raw_attr);
+            NewFD->setInvalidDecl();
+          }
+        }
+      }
+    }
+  }
+
   if (OriginalLexicalContext && OriginalLexicalContext->isObjCContainer())
     NewFD->setTopLevelDeclInObjCContainer();
 
@@ -19002,6 +19016,13 @@ FieldDecl *Sema::HandleField(Scope *S, RecordDecl *Record,
     Diag(D.getDeclSpec().getThreadStorageClassSpecLoc(),
          diag::err_invalid_thread)
       << DeclSpec::getSpecifierName(TSCS);
+
+  if (Context.getTargetInfo().isSigModeSupported()) {
+    if (T.isRawQualified()) {
+      Diag(Loc, diag::err_struct_without_raw_attr);
+      D.setInvalidType();
+    }
+  }
 
   // Check to see if this name was declared as a member previously
   NamedDecl *PrevDecl = nullptr;
