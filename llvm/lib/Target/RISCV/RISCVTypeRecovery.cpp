@@ -14,6 +14,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/Casting.h"
@@ -517,7 +518,8 @@ int TypeRecovery::initialize() {
         if (dyn_cast<CallBase>(&I) || dyn_cast<CastInst>(&I) ||
           dyn_cast<GetElementPtrInst>(&I) || dyn_cast<AllocaInst>(&I) ||
           dyn_cast<LoadInst>(&I) || dyn_cast<StoreInst>(&I) ||
-          dyn_cast<PHINode>(&I) || dyn_cast<SelectInst>(&I)) {
+          dyn_cast<PHINode>(&I) || dyn_cast<SelectInst>(&I) ||
+          dyn_cast<AddrSpaceCastInst>(&I)) {
           func_IR_num++;
         }
 
@@ -554,8 +556,9 @@ int TypeRecovery::initialize() {
           Worklist.insert(LD);
         } else if (auto *SD = dyn_cast<StoreInst>(&I)) {
           Worklist.insert(SD);
+        } else if (auto *ASC = dyn_cast<AddrSpaceCastInst>(&I)) {
+          Worklist.insert(ASC);
         }
-
       }
     }
     if (func_IR_num > max_func_IR_num) {
@@ -692,6 +695,8 @@ bool TypeRecovery::computeForwardTypes(Instruction *I) {
     }
   } else if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
     changed = handleGEP(GEP);
+  } else if (auto *ASC = dyn_cast<AddrSpaceCastInst>(I)) {
+    changed = handleAddrSpaceCast(ASC);
   }
   return changed;
 }
@@ -883,6 +888,25 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
   return Changed;
 }
 
+bool TypeRecovery::handleAddrSpaceCast(AddrSpaceCastInst *ASC) {
+  // AddrSpaceCast: inherit source types
+  if (!ASC->getType()->isPointerTy())
+    return false;
+  
+  Value *Src = ASC->getOperand(0);
+  if (!Src->getType()->isPointerTy())
+    return false;
+
+  const TypeSet *SrcTypes = getTypeSet(Src);
+  if (SrcTypes) {
+    if (unionTypes(ASC, *SrcTypes)) {
+      NextWorklist.insert(ASC);
+      return true;
+    }
+  }
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // Backward Propagation
 //===----------------------------------------------------------------------===//
@@ -920,6 +944,8 @@ bool TypeRecovery::propagateBackward(Value *V) {
     } else {
       changed = backpropCall(CB);
     }
+  } else if (auto *ASC = dyn_cast<AddrSpaceCastInst>(I)) {
+    changed = backpropAddrSpaceCast(ASC);
   }
 
   return changed;
@@ -1222,6 +1248,26 @@ bool TypeRecovery::backpropGEP(GetElementPtrInst *GEP) {
 
   return Changed;
 
+}
+
+bool TypeRecovery::backpropAddrSpaceCast(AddrSpaceCastInst *ASC) {
+  // AddrSpaceCast: inherit source types
+  if (!ASC->getType()->isPointerTy())
+    return false;
+  
+  const TypeSet *ResultTypes = getTypeSet(ASC);
+  if (!ResultTypes || ResultTypes->empty())
+    return false;
+  
+  Value *Src = ASC->getOperand(0);
+  if (!Src->getType()->isPointerTy())
+    return false;
+
+  if (unionTypes(Src, *ResultTypes)) {
+    NextWorklist.insert(Src);
+    return true;
+  }
+  return false;
 }
 
 //===----------------------------------------------------------------------===//

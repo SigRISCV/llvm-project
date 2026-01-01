@@ -248,6 +248,9 @@ private:
 
   bool handleCall(CallBase *CI);
 
+  /// AddrSpaceCast: inherit source types
+  bool handleAddrSpaceCast(AddrSpaceCastInst *ASC);
+
   //===--------------------------------------------------------------------===//
   // Backward Propagation Rules
   // Returns true if any types were added
@@ -280,6 +283,9 @@ private:
 
   /// Call: return type from !sigmode.func metadata
   bool backpropCall(CallBase *CI);
+
+  /// AddrSpaceCast: propagate result type to source
+  bool backpropAddrSpaceCast(AddrSpaceCastInst *ASC);
 };
 
 } // end namespace llvm
