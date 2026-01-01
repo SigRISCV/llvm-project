@@ -130,9 +130,22 @@ RawAddress CodeGenFunction::MaybeCastStackAddressSpace(RawAddress Alloca,
     // builder.
     if (!ArraySize)
       Builder.SetInsertPoint(getPostAllocaInsertPoint());
-    V = getTargetHooks().performAddrSpaceCast(
-        *this, V, getASTAllocaAddressSpace(), Builder.getPtrTy(DestAddrSpace),
-        /*IsNonNull=*/true);
+    
+    // For SigMode targets, use special suffix ".ascast_alloca" to distinguish 
+    // alloca casts from other addrspacecasts. This helps the backend identify
+    // the real address space for memcpy/memset optimization.
+    if (getContext().getTargetInfo().isSigModeSupported()) {
+      llvm::Type *DestTy = Builder.getPtrTy(DestAddrSpace);
+      std::string CastName = V->hasName() 
+          ? (V->getName() + ".ascast_alloca").str() 
+          : "";
+      V = Builder.CreateAddrSpaceCast(V, DestTy, CastName);
+    } else {
+      // Non-SigMode targets: use the original performAddrSpaceCast API
+      V = getTargetHooks().performAddrSpaceCast(
+          *this, V, getASTAllocaAddressSpace(), Builder.getPtrTy(DestAddrSpace),
+          /*IsNonNull=*/true);
+    }
   }
 
   return RawAddress(V, Alloca.getElementType(), Alloca.getAlignment(),

@@ -20,6 +20,7 @@
 #include "CGOpenMPRuntime.h"
 #include "CodeGenModule.h"
 #include "CodeGenPGO.h"
+#include "PointeeTypeAnnotator.h"
 #include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
@@ -1366,6 +1367,17 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
 
   if (CGM.shouldEmitConvergenceTokens())
     ConvergenceTokenStack.push_back(getOrEmitConvergenceEntryToken(CurFn));
+
+  // Annotate function arguments and return type with pointee type information.
+  if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
+    // Get function type from the function declaration
+    QualType FuncTy;
+    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(CurFuncDecl)) {
+      FuncTy = FD->getType();
+      PTA->annotateFunction(CurFn, FuncTy, *CurFnInfo);
+    }
+    
+  }
 }
 
 void CodeGenFunction::EmitFunctionBody(const Stmt *Body) {
@@ -3397,6 +3409,8 @@ void CodeGenFunction::addInstToNewSourceAtom(llvm::Instruction *KeyInstruction,
 ///  - The type contains pointers (and is not a union)
 /// Emits warning for union types that contain pointers.
 bool CodeGenFunction::ShouldUseSigMemcpy(Address DestPtr, Address SrcPtr, QualType Ty) {
+  return false;
+
   if (!getContext().getTargetInfo().isSigModeSupported())
     return false;
   
@@ -3511,6 +3525,8 @@ llvm::CallInst* CodeGenFunction::EmitSigMemcpyCall(Address Dest, Address Src,
 ///  - The type contains pointers (and is not a union)
 /// For pointer fields, sigmemset will store xsig_setdummyid(null) instead of 0.
 bool CodeGenFunction::ShouldUseSigMemset(Address DestPtr, QualType Ty) {
+  return false;
+
   if (!getContext().getTargetInfo().isSigModeSupported())
     return false;
   

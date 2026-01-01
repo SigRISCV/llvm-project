@@ -983,6 +983,7 @@ public:
 
   bool UseExcessPrecision(const ASTContext &Ctx);
   QualType getRawChainType(const ASTContext &Ctx);
+  QualType getNoRawChainType(const ASTContext &Ctx);
 
   /// Retrieves a pointer to the underlying (unqualified) type.
   ///

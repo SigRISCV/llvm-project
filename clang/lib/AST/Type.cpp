@@ -1677,38 +1677,75 @@ bool QualType::UseExcessPrecision(const ASTContext &Ctx) {
   return false;
 }
 
-static QualType getRawQual(QualType type, const ASTContext &Ctx) {
-  if (type.isRawQualified()) {
-    return type;
-  }
-  Qualifiers Qs = type.getQualifiers();
-  Qs.addRaw();
-  return Ctx.getQualifiedType(type, Qs);
-}
-
 QualType QualType::getRawChainType(const ASTContext &Ctx) {
   const Type* type = getTypePtr();
   QualType ret = *this;
   if (type->isPointerType()) {
-    const PointerType* pointer = cast<PointerType>(type);
+    const PointerType* pointer = type->getAs<PointerType>();
     QualType pointee = pointer->getPointeeType();
     if (!pointee.isRawQualified()) {
       if (pointee->isFunctionType()) {
-        const FunctionProtoType* function = pointee->getAs<FunctionProtoType>();
-        QualType rettype = getRawQual(function->getReturnType(), Ctx);
-        SmallVector<QualType, 16> ParamTys;
-        for (QualType qual:function->getParamTypes()) {
-          qual = qual.getRawChainType(Ctx);
-          ParamTys.push_back(qual);
-        }
-        FunctionProtoType::ExtProtoInfo EPI = function->getExtProtoInfo();
-        EPI.ExtInfo = EPI.ExtInfo.withIsRaw(true);
-        pointee = Ctx.getFunctionType(rettype, ParamTys, EPI);
+        pointee = pointee.getRawChainType(Ctx);
       } else {
-        pointee = getRawQual(pointee, Ctx);
+        pointee = Ctx.getRawQual(pointee);
       }
       ret = Ctx.getPointerType(pointee);
       ret = Ctx.getQualifiedType(ret, this->getQualifiers());
+    }
+  } else if (type->isFunctionType()) {
+    const FunctionProtoType* function = type->getAs<FunctionProtoType>();
+    QualType rettype = Ctx.getRawQual(function->getReturnType());
+    SmallVector<QualType, 16> ParamTys;
+    for (QualType qual:function->getParamTypes()) {
+      qual = qual.getRawChainType(Ctx);
+      ParamTys.push_back(qual);
+    }
+    FunctionProtoType::ExtProtoInfo EPI = function->getExtProtoInfo();
+    EPI.ExtInfo = EPI.ExtInfo.withIsRaw(true);
+    ret = Ctx.getFunctionType(rettype, ParamTys, EPI);
+  }
+  return ret;
+}
+
+QualType QualType::getNoRawChainType(const ASTContext &Ctx) {
+  const Type* type = getTypePtr();
+  QualType ret = *this;
+  if (type->isPointerType()) {
+    if (const PointerType* pointer = type->getAs<PointerType>()) {
+      QualType pointee = pointer->getPointeeType();
+      pointee = Ctx.getNoRawQual(pointee);
+      ret = Ctx.getPointerType(pointee);
+      Qualifiers quals = this->getQualifiers();
+      quals.removeRaw();
+      ret = Ctx.getQualifiedType(ret, quals);
+    }
+  } else if (type->isFunctionType()) {
+    if(const FunctionProtoType* function = type->getAs<FunctionProtoType>()) {
+      QualType rettype = Ctx.getNoRawQual(function->getReturnType());
+      SmallVector<QualType, 16> ParamTys;
+      for (QualType qual:function->getParamTypes()) {
+        qual = qual.getNoRawChainType(Ctx);
+        ParamTys.push_back(qual);
+      }
+      FunctionProtoType::ExtProtoInfo EPI = function->getExtProtoInfo();
+      EPI.ExtInfo = EPI.ExtInfo.withIsRaw(false);
+      ret = Ctx.getFunctionType(rettype, ParamTys, EPI);
+    }
+  } else if (type->isArrayType()) {
+    const ArrayType* array = type->getAsArrayTypeUnsafe();
+    QualType elementType = array->getElementType();
+    elementType = Ctx.getNoRawQual(elementType);
+    if (const auto *cat = dyn_cast<ConstantArrayType>(array)) {
+      ret = Ctx.getConstantArrayType(elementType, cat->getSize(),
+                                     cat->getSizeExpr(), cat->getSizeModifier(),
+                                     cat->getIndexTypeCVRQualifiers());
+    } else if (const auto *vat = dyn_cast<VariableArrayType>(array)) {
+      ret = Ctx.getVariableArrayType(elementType, vat->getSizeExpr(),
+                                     vat->getSizeModifier(),
+                                     vat->getIndexTypeCVRQualifiers());
+    } else if (const auto *iat = dyn_cast<IncompleteArrayType>(array)) {
+      ret = Ctx.getIncompleteArrayType(elementType, iat->getSizeModifier(),
+                                       iat->getIndexTypeCVRQualifiers());
     }
   }
   return ret;

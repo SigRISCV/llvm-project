@@ -97,6 +97,7 @@ class CGCUDARuntime;
 class CGHLSLRuntime;
 class CoverageMappingModuleGen;
 class TargetCodeGenInfo;
+class PointeeTypeAnnotator;
 
 enum ForDefinition_t : bool {
   NotForDefinition = false,
@@ -383,6 +384,9 @@ private:
   InstrProfStats PGOStats;
   std::unique_ptr<llvm::SanitizerStatReport> SanStats;
   StackExhaustionHandler StackHandler;
+
+  /// Pointee type annotator for tracking pointer types.
+  std::unique_ptr<PointeeTypeAnnotator> PointeeAnnotator;
 
   // A set of references that have only been seen via a weakref so far. This is
   // used to remove the weak of the reference if we ever see a direct reference
@@ -814,6 +818,11 @@ public:
   }
 
   CGDebugInfo *getModuleDebugInfo() { return DebugInfo.get(); }
+
+  /// Get the pointee type annotator.
+  PointeeTypeAnnotator *getPointeeAnnotator() {
+    return PointeeAnnotator.get();
+  }
 
   llvm::MDNode *getNoObjCARCExceptionsMetadata() {
     if (!NoObjCARCExceptionsMetadata)

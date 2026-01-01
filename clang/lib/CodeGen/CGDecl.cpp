@@ -22,6 +22,7 @@
 #include "ConstantEmitter.h"
 #include "EHScopeStack.h"
 #include "PatternInit.h"
+#include "PointeeTypeAnnotator.h"
 #include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
@@ -487,6 +488,10 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
   if (DI && CGM.getCodeGenOpts().hasReducedDebugInfo()) {
     DI->setLocation(D.getLocation());
     DI->EmitGlobalVariable(var, &D);
+  }
+
+  if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
+    PTA->annotateGlobalVariable(var, D.getType());
   }
 }
 
@@ -1188,6 +1193,10 @@ Address CodeGenModule::createUnnamedGlobalFrom(const VarDecl &D,
     CacheEntry->setAlignment(Align.getAsAlign());
   }
 
+  if (PointeeTypeAnnotator *PTA = getPointeeAnnotator()) {
+    PTA->annotateGlobalVariable(CacheEntry, D.getType());
+  }
+
   return Address(CacheEntry, CacheEntry->getValueType(), Align);
 }
 
@@ -1778,6 +1787,18 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
     if (shouldExtendLifetime(getContext(), CurCodeDecl, D, CXXABIThisDecl))
       EHStack.pushCleanup<FakeUse>(NormalFakeUse,
                                    emission.getAllocatedAddress());
+  }
+
+  // Annotate alloca with pointee type information.
+  if (PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator()) {
+    if (AllocaAddr.isValid()) {
+      if (auto *AI = dyn_cast<llvm::AllocaInst>(AllocaAddr.getPointer())) {
+        if (NRVO && ReturnValuePointer.isValid()) {
+          Ty = getContext().getPointerType(Ty);
+        }
+        PTA->annotateAlloca(AI, Ty);
+      }
+    }
   }
 
   return emission;

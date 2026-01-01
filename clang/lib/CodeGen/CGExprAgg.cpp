@@ -308,8 +308,14 @@ void AggExprEmitter::withReturnValueSlot(
     RetAddr = Dest.getAddress();
   } else {
     const CallExpr *CE = dyn_cast<CallExpr>(E);
-    const QualType pointee = cast<PointerType>(CE->getCallee()->getType())->getPointeeType();
-    const FunctionProtoType* functiontype = dyn_cast<FunctionProtoType>(pointee);
+    QualType functype = CE->getCallee()->getType();
+    const FunctionProtoType* functiontype = nullptr;
+    if (functype->isPointerType()) {
+      functiontype = dyn_cast<FunctionProtoType>(
+          functype->getPointeeType());
+    } else {
+      functiontype = dyn_cast<FunctionProtoType>(functype);
+    }
     QualType TempRetTy = CGF.getContext().maybeAddRawQualifier(
         RetTy, functiontype && functiontype->getExtInfo().getIsRaw());
     RetAddr = CGF.CreateMemTemp(TempRetTy, "tmp");

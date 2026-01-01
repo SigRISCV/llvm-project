@@ -156,6 +156,7 @@ add_clang_library(clangCodeGen
   Targets/XCore.cpp
   TrapReasonBuilder.cpp
   VarBypassDetector.cpp
+  PointeeTypeAnnotator.cpp
 
   DEPENDS
   vt_gen

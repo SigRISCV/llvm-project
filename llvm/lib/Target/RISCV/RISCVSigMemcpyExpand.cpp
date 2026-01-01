@@ -31,6 +31,7 @@
 #include "RISCV.h"
 #include "RISCVSubtarget.h"
 #include "RISCVTargetMachine.h"
+#include "RISCVTypeRecovery.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringMap.h"
@@ -39,13 +40,18 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstdint>
 
 using namespace llvm;
 
@@ -55,6 +61,8 @@ using namespace llvm;
 STATISTIC(NumMemcpyExpanded, "Number of sigmemcpy intrinsics expanded");
 STATISTIC(NumMemsetExpanded, "Number of sigmemset intrinsics expanded");
 STATISTIC(NumHelperFuncsCreated, "Number of helper functions created");
+STATISTIC(NumMemcpyConverted, "Number of memcpy calls converted to sigmemcpy");
+STATISTIC(NumMemsetConverted, "Number of memset calls converted to sigmemset");
 
 namespace {
 
@@ -81,15 +89,46 @@ private:
   const DataLayout *DL = nullptr;
   LLVMContext *Ctx = nullptr;
   
+  // Type recovery for inferring memcpy src/dest types
+  std::unique_ptr<TypeRecovery> TR;
+  
   // Cache of generated helper functions: name -> Function*
   StringMap<Function *> HelperFuncCache;
+
+  //===--------------------------------------------------------------------===//
+  // Type Recovery and Memcpy Conversion
+  //===--------------------------------------------------------------------===//
+  
+  // Run type recovery on the module
+  void runTypeRecovery(SmallVector<Function*, 0> FunctionsToProcess);
+  
+  // Check if a call is a memcpy/memmove that needs conversion
+  bool isMemcpyCall(CallBase *CB);
+  
+  // Check if a call is a memset that needs conversion
+  bool isMemsetCall(CallBase *CB);
+  
+  // Get the best type for memcpy conversion from recovered types
+  // Returns nullptr if no suitable type found
+  Type *selectMemcpyType(Value* I, Value *Dest, Value *Src, uint64_t Size);
+  
+  // Get the best type for memset conversion from recovered dest type
+  // Returns nullptr if no suitable type found
+  Type *selectMemsetType(Value* I, Value *Dest, uint64_t Size);
+
+  Type *selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size);
+
+  SmallPtrSet<MDNode *, 4> filterBareAndSimplePointeeTypes(
+      const SmallPtrSet<MDNode *, 4> &Types);
+
+  std::string getMangledTypeName(Type *Ty);
 
   //===--------------------------------------------------------------------===//
   // Sigmemcpy functions
   //===--------------------------------------------------------------------===//
   
   // Expand a single sigmemcpy intrinsic call
-  bool expandSigMemcpy(IntrinsicInst *II);
+  bool expandSigMemcpy(CallInst *II);
 
   // Get or create a helper function for the given type and address spaces
   Function *getOrCreateMemcpyFunc(Type *ElemTy, unsigned DestAS, unsigned SrcAS);
@@ -108,7 +147,7 @@ private:
   //===--------------------------------------------------------------------===//
   
   // Expand a single sigmemset intrinsic call
-  bool expandSigMemset(IntrinsicInst *II);
+  bool expandSigMemset(CallInst *II);
 
   // Get or create a helper function for memset with given type and address space
   Function *getOrCreateMemsetFunc(Type *ElemTy, unsigned DestAS);
@@ -126,9 +165,6 @@ private:
   //===--------------------------------------------------------------------===//
   // Utility functions
   //===--------------------------------------------------------------------===//
-
-  // Get mangled name for a type
-  std::string getMangledTypeName(Type *Ty);
 
   // Generate a call to llvm.memcpy for types without pointers
   void emitMemcpyCall(IRBuilder<> &Builder, Value *Dest, Value *Src,
@@ -150,6 +186,226 @@ char RISCVSigMemcpyExpand::ID = 0;
 
 INITIALIZE_PASS(RISCVSigMemcpyExpand, DEBUG_TYPE,
                 RISCV_SIG_MEMCPY_EXPAND_NAME, false, false)
+
+//===----------------------------------------------------------------------===//
+// Type Recovery and Memcpy Conversion
+//===----------------------------------------------------------------------===//
+
+void RISCVSigMemcpyExpand::runTypeRecovery(SmallVector<Function*, 0> FunctionsToProcess) {
+  TR = std::make_unique<TypeRecovery>(*Mod);
+  TR->run(FunctionsToProcess);
+
+  LLVM_DEBUG(dbgs() << "Type recovery completed\n");
+  LLVM_DEBUG(TR->dump(dbgs()));
+}
+
+/// Get the real address space of a pointer, looking through addrspacecast.
+/// For explicit memcpy/memset calls, pointers might be cast from AS(0) to AS(100).
+/// Returns the "real" address space based on:
+/// 1. If ptr comes from addrspacecast with ".ascast_alloca" suffix,
+///    it's an alloca cast to AS100 - real AS is AS100
+/// 2. If ptr comes from other addrspacecast: use the source AS
+/// 3. Otherwise, use the direct AS
+static Value* getRealPtr(Value *Ptr) {
+  // Look for addrspacecast
+  if (auto *ASC = dyn_cast<AddrSpaceCastInst>(Ptr)) {
+    // Check if this is an alloca-generated cast (marked with .ascast_alloca suffix)
+    // Pattern: alloca -> addrspacecast with name ".ascast_alloca"
+    // This means the real storage is in AS0 (alloca space)
+    if (ASC->hasName() && ASC->getName().contains(".ascast_alloca")) {
+      // alloca cast to AS100 - real AS is AS100
+      return Ptr;
+    }
+    
+    // For other addrspacecasts, use source AS
+    return ASC->getOperand(0);
+  }
+  
+  // No cast, use direct AS
+  return Ptr;
+}
+
+bool RISCVSigMemcpyExpand::isMemcpyCall(CallBase *CB) {
+  Function *Callee = CB->getCalledFunction();
+  if (!Callee)
+    return false;
+  
+  StringRef Name = Callee->getName();
+  // Match memcpy, memmove, llvm.memcpy.*, llvm.memmove.*
+  return Name == "memcpy" || Name == "memmove" ||
+         Name.starts_with("llvm.memcpy") || 
+         Name.starts_with("llvm.memmove");
+}
+
+bool RISCVSigMemcpyExpand::isMemsetCall(CallBase *CB) {
+  Function *Callee = CB->getCalledFunction();
+  if (!Callee)
+    return false;
+  
+  StringRef Name = Callee->getName();
+  // Match memset, llvm.memset.*
+  return Name == "memset" || Name.starts_with("llvm.memset");
+}
+
+/// Check if a type metadata is a bare "ptr undef" (no pointee info)
+/// This type is added by TypeRecovery as default for all pointers
+/// and should be ignored when selecting concrete types
+static bool isBarePointerTypeMD(MDNode *MD) {
+  if (!MD || MD->getNumOperands() < 1)
+    return false;
+  
+  auto *CAM = dyn_cast<ConstantAsMetadata>(MD->getOperand(0));
+  if (!CAM)
+    return false;
+  
+  auto *Undef = dyn_cast<UndefValue>(CAM->getValue());
+  if (!Undef)
+    return false;
+  
+  // It's a pointer type with no pointee metadata (only 1 operand)
+  return Undef->getType()->isPointerTy() && MD->getNumOperands() == 1;
+}
+
+/// Filter out bare "ptr undef" types from a type set
+/// Returns the filtered set
+SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndSimplePointeeTypes(
+    const SmallPtrSet<MDNode *, 4> &Types) {
+  static MDNode* PtrVoidMD = nullptr;
+  static MDNode* Int8MD = nullptr;
+  if (!PtrVoidMD) {
+    PtrVoidMD = TR->lookupTypeByString("void*");
+    assert(PtrVoidMD && "ptr_to_void type metadata not found");
+  }
+
+  if (!Int8MD) {
+    Int8MD = TR->lookupTypeByString("i8");
+    assert(Int8MD && "i8 type metadata not found");
+  }
+
+  SmallPtrSet<MDNode *, 4> Filtered;
+  for (MDNode *MD : Types) {
+    if (!TR->isPointerTypeMD(MD))
+      continue;
+    if (isBarePointerTypeMD(MD))
+      continue;
+    MDNode *PointeeMD = TR->getPointeeTypeMD(MD);
+    while (TR->isArrayTypeMD(PointeeMD)) {
+      PointeeMD = TR->getArrayElementTypeMD(PointeeMD);
+    }
+    Type* LLVMType = TR->getLLVMTypeFromMD(PointeeMD);
+    if (!LLVMType->containsPointer()) {
+      Filtered.insert(Int8MD);
+    } else if (LLVMType->isPointerOnlyType()) {
+      Filtered.insert(PtrVoidMD);
+    } else {
+      Filtered.insert(PointeeMD);
+    }
+  }
+  return Filtered;
+}
+
+Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size) {
+  // Get source location for better diagnostics
+  std::string SrcLoc = TypeRecovery::getSourceLocation(I);
+  std::string LocStr = SrcLoc.empty() ? "" : " at " + SrcLoc;
+
+  // Convert to SmallPtrSet and filter out bare ptr undef
+  SmallPtrSet<MDNode *, 4> Types;
+  for (MDNode *MD : *DestTypes)
+    Types.insert(MD);
+  Types = filterBareAndSimplePointeeTypes(Types);
+  
+  if (Types.empty()) {
+    LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memset\n");
+    errs() << "Warning: memset destination has only bare pointer type, no concrete type" 
+           << LocStr << "\n";
+    return nullptr;
+  }
+  
+  if (Types.size() == 1) {
+    // Single type - use it
+    MDNode *MD = *Types.begin();
+    // Get the pointee type (since dest is a pointer)
+    return TR->getLLVMTypeFromMD(MD);
+  }
+  
+  // Multiple types - emit warning with details and select by size
+  LLVM_DEBUG(dbgs() << "  Warning: Multiple types (" << Types.size() 
+                    << ") for memset, selecting by size\n");
+  errs() << "Warning: memset has multiple candidate types (" << Types.size() 
+         << ")" << LocStr << ":\n";
+  for (MDNode *MD : Types) {
+    errs() << "  - " << TR->getTypeString(MD) << "\n";
+  }
+  errs() << "More details on candidate types:\n";
+  for (MDNode *MD : *DestTypes) {
+    errs() << "  - " << TR->getTypeString(MD) << "\n";
+  }
+  errs() << "  Selecting best match by size...\n";
+  
+  Type *BestType = nullptr;
+  
+  for (MDNode *PointeeMD : Types) {
+    if (!PointeeMD)
+      continue;
+    Type *Ty = TR->getLLVMTypeFromMD(PointeeMD);
+    if (!Ty)
+      continue;
+    
+    uint64_t TySize = DL->getTypeAllocSize(Ty);
+    // Check if Size is a multiple of TySize
+    if (Size == maxUIntN(uint64_t(64))) {
+      // Unknown size - prefer larger types
+      if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
+        BestType = Ty;
+      }
+      continue;
+    } else if (Size % TySize == 0) {
+      if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
+        BestType = Ty;
+      }
+      continue;
+    }
+  }
+  
+  if (BestType) {
+    LLVM_DEBUG(dbgs() << "  Selected type for memset: " << *BestType << "\n");
+  } else {
+    errs() << "Warning: memset could not determine element type from candidates" 
+           << LocStr << "\n";
+  }
+  
+  return BestType;
+}
+
+Type* RISCVSigMemcpyExpand::selectMemsetType(Value* I, Value *Dest, uint64_t Size) {
+  return selectUsedType(I, TR->getTypeSet(Dest), Size);
+}
+
+Type *RISCVSigMemcpyExpand::selectMemcpyType(Value* I, Value *Dest, Value *Src, 
+                                              uint64_t Size) {
+  
+  // Get recovered types for both dest and src
+  const TypeRecovery::TypeSet *DestTypes = TR->getTypeSet(Dest);
+  const TypeRecovery::TypeSet *SrcTypes = TR->getTypeSet(Src);
+  
+  // Merge both type sets
+  SmallPtrSet<MDNode *, 4> MergedTypes;
+  if (DestTypes) {
+    for (MDNode *MD : *DestTypes)
+      MergedTypes.insert(MD);
+  }
+  if (SrcTypes) {
+    for (MDNode *MD : *SrcTypes)
+      MergedTypes.insert(MD);
+  }
+
+  return selectUsedType(I, &MergedTypes, Size);
+}
+
+//===----------------------------------------------------------------------===//
+// Original Functions
+//===----------------------------------------------------------------------===//
 
 void RISCVSigMemcpyExpand::emitMemcpyCall(IRBuilder<> &Builder, 
                                            Value *Dest, Value *Src,
@@ -268,7 +524,7 @@ Function *RISCVSigMemcpyExpand::getOrCreateMemcpyFunc(Type *ElemTy,
   F->addParamAttr(1, Attribute::ReadOnly);
   
   // Name the arguments
-  auto ArgIt = F->arg_begin();
+  auto *ArgIt = F->arg_begin();
   ArgIt->setName("dest"); ++ArgIt;
   ArgIt->setName("src"); ++ArgIt;
   ArgIt->setName("len");
@@ -290,10 +546,10 @@ void RISCVSigMemcpyExpand::generateMemcpyFuncBody(Function *F, Type *ElemTy,
   BasicBlock *BodyBB = BasicBlock::Create(*Ctx, "body", F);
   BasicBlock *ExitBB = BasicBlock::Create(*Ctx, "exit", F);
   
-  auto ArgIt = F->arg_begin();
-  Value *Dest = &*ArgIt++;
-  Value *Src = &*ArgIt++;
-  Value *Len = &*ArgIt;
+  auto *ArgIt2 = F->arg_begin();
+  Value *Dest = &*ArgIt2++;
+  Value *Src = &*ArgIt2++;
+  Value *Len = &*ArgIt2;
   
   IRBuilder<> Builder(EntryBB);
   
@@ -412,91 +668,66 @@ void RISCVSigMemcpyExpand::copyElementInFunc(IRBuilder<> &Builder,
   }
 }
 
-/// Look up type from module-level named metadata by type ID.
-/// The named metadata format: !sigmemcpy.types = !{!0, !1, ...}
-///   !0 = !{i64 0, %struct.Type undef}
-/// Returns nullptr if not found.
-static Type *getTypeFromNamedMetadata(Module *M, StringRef MetadataName, 
-                                       uint64_t TypeId) {
-  NamedMDNode *TypeRegistry = M->getNamedMetadata(MetadataName);
-  if (!TypeRegistry)
-    return nullptr;
-  
-  for (unsigned i = 0; i < TypeRegistry->getNumOperands(); ++i) {
-    MDNode *Entry = TypeRegistry->getOperand(i);
-    if (Entry->getNumOperands() >= 2) {
-      // Entry format: !{i64 ID, %Type undef}
-      if (auto *IdMD = dyn_cast<ConstantAsMetadata>(Entry->getOperand(0))) {
-        if (auto *IdConst = dyn_cast<ConstantInt>(IdMD->getValue())) {
-          if (IdConst->getZExtValue() == TypeId) {
-            // Found the entry with matching ID
-            if (auto *TypeMD = dyn_cast<ValueAsMetadata>(Entry->getOperand(1))) {
-              return TypeMD->getType();
-            }
-          }
-        }
-      }
-    }
-  }
-  return nullptr;
-}
-
-bool RISCVSigMemcpyExpand::expandSigMemcpy(IntrinsicInst *II) {
+bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
   Value *Dest = II->getArgOperand(0);
   Value *Src = II->getArgOperand(1);
   Value *LenVal = II->getArgOperand(2);
-  Value *TypeIdVal = II->getArgOperand(3);  // New: type ID parameter
   
   // Get address spaces
+  if (II->getCalledFunction()->getName() == "memcpy") {
+    Dest = getRealPtr(Dest);
+    Src = getRealPtr(Src);
+  }
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
   unsigned SrcAS = Src->getType()->getPointerAddressSpace();
-  
+
   LLVM_DEBUG(dbgs() << "Expanding sigmemcpy: dest AS=" << DestAS 
                     << ", src AS=" << SrcAS << "\n");
-  
-  // Get the element type from module-level named metadata using type ID
-  auto *TypeIdConst = dyn_cast<ConstantInt>(TypeIdVal);
-  assert(TypeIdConst && "llvm.riscv.xsig.memcpy type_id must be constant");
-  uint64_t TypeId = TypeIdConst->getZExtValue();
-  
-  Type *ElemTy = getTypeFromNamedMetadata(Mod, "sigmemcpy.types", TypeId);
-  assert(ElemTy && "Could not find type in !sigmemcpy.types metadata");
-  
-  LLVM_DEBUG(dbgs() << "  Element type (ID=" << TypeId << "): " << *ElemTy << "\n");
+
+  bool HasPointers = false;
+  Type* ElemTy = nullptr;
+  bool IsRawToRaw = (DestAS == RawAS && SrcAS == RawAS);
+
+  if (!IsRawToRaw) {
+    uint64_t len = maxUIntN(64);
+    if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
+      len = LenCI->getZExtValue();
+    }
+    ElemTy = selectMemcpyType(II, Dest, Src, len);
+    if (!ElemTy) {
+      IsRawToRaw = true;
+    } else {
+      HasPointers = ElemTy->containsPointer();
+    }
+  }
   
   IRBuilder<> Builder(II);
-  
-  // Optimization 1: For raw-to-raw copy, just use regular memcpy
-  // Optimization 2: For types without pointers, just use regular memcpy
-  bool IsRawToRaw = (DestAS == RawAS && SrcAS == RawAS);
-  bool HasPointers = ElemTy->containsPointer();
   
   if (IsRawToRaw || !HasPointers) {
     LLVM_DEBUG(dbgs() << "  Using llvm.memcpy (raw-to-raw=" << IsRawToRaw 
                       << ", has_pointers=" << HasPointers << ")\n");
-    
-    uint64_t ElemSize = DL->getTypeAllocSize(ElemTy);
-    
-    // Calculate total size
-    if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
-      uint64_t TotalSize = ElemSize * LenCI->getZExtValue();
-      emitMemcpyCall(Builder, Dest, Src, Builder.getInt64(TotalSize), DestAS, SrcAS);
-    } else {
-      // Dynamic length: compute size at runtime
-      Value *TotalSize = Builder.CreateMul(LenVal, Builder.getInt64(ElemSize));
-      emitMemcpyCall(Builder, Dest, Src, TotalSize, DestAS, SrcAS);
-    }
+    return false;
   } else {
     // Need to generate helper function for pointer re-signing
+    LLVM_DEBUG(dbgs() << "  Using sigmemcpy helper function for type: " << *ElemTy << "\n");
+    LLVM_DEBUG(dbgs() << "  Length value: " << *LenVal << "\n");
+    if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
+      uint64_t bytelen = LenCI->getZExtValue();
+      uint64_t elementsize = bytelen / DL->getTypeAllocSize(ElemTy);
+      LenVal = Builder.getInt64(elementsize);
+    } else {
+      uint64_t elementsize = DL->getTypeAllocSize(ElemTy);
+      Value *ElemSizeVal = Builder.getInt64(elementsize);
+      LenVal = Builder.CreateUDiv(LenVal, ElemSizeVal, "elem.len");
+    }
     Function *HelperF = getOrCreateMemcpyFunc(ElemTy, DestAS, SrcAS);
     Builder.CreateCall(HelperF, {Dest, Src, LenVal});
+
+    // Remove the original intrinsic call
+    II->eraseFromParent();
+    NumMemcpyExpanded++;
+    return true;
   }
-  
-  // Remove the original intrinsic call
-  II->eraseFromParent();
-  NumMemcpyExpanded++;
-  
-  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -688,50 +919,54 @@ void RISCVSigMemcpyExpand::zeroElementInFunc(IRBuilder<> &Builder,
   }
 }
 
-bool RISCVSigMemcpyExpand::expandSigMemset(IntrinsicInst *II) {
+bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
   Value *Dest = II->getArgOperand(0);
-  Value *LenVal = II->getArgOperand(1);
-  Value *TypeIdVal = II->getArgOperand(2);  // New: type ID parameter
+  Value *LenVal = II->getArgOperand(2);
   
   // Get address space
+  if (II->getCalledFunction()->getName() == "memset") {
+    Dest = getRealPtr(Dest);
+  }
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
-  
+
   LLVM_DEBUG(dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n");
   
-  // Get the element type from module-level named metadata using type ID
-  auto *TypeIdConst = dyn_cast<ConstantInt>(TypeIdVal);
-  assert(TypeIdConst && "llvm.riscv.xsig.memset type_id must be constant");
-  uint64_t TypeId = TypeIdConst->getZExtValue();
-  
-  Type *ElemTy = getTypeFromNamedMetadata(Mod, "sigmemset.types", TypeId);
-  assert(ElemTy && "Could not find type in !sigmemset.types metadata");
-  
-  LLVM_DEBUG(dbgs() << "  Element type (ID=" << TypeId << "): " << *ElemTy << "\n");
+  bool HasPointers = false;
+  Type* ElemTy = nullptr;
+  bool IsRawToRaw = (DestAS == RawAS);
+
+  if (!IsRawToRaw) {
+    uint64_t len = maxUIntN(64);
+    if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
+      len = LenCI->getZExtValue();
+    }
+    ElemTy = selectMemsetType(II, Dest, len);
+    if (!ElemTy) {
+      IsRawToRaw = true;
+    } else {
+      HasPointers = ElemTy->containsPointer();
+    }
+  }
   
   IRBuilder<> Builder(II);
   
-  // Optimization 1: For raw address space, just use regular memset
-  // Optimization 2: For types without pointers, just use regular memset
-  bool IsRaw = (DestAS == RawAS);
-  bool HasPointers = ElemTy->containsPointer();
-  
-  if (IsRaw || !HasPointers) {
-    LLVM_DEBUG(dbgs() << "  Using llvm.memset (raw=" << IsRaw 
+  if (IsRawToRaw || !HasPointers) {
+    LLVM_DEBUG(dbgs() << "  Using llvm.memset (raw=" << IsRawToRaw
                       << ", has_pointers=" << HasPointers << ")\n");
-    
-    uint64_t ElemSize = DL->getTypeAllocSize(ElemTy);
-    
-    // Calculate total size
-    if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
-      uint64_t TotalSize = ElemSize * LenCI->getZExtValue();
-      emitMemsetCall(Builder, Dest, Builder.getInt64(TotalSize), DestAS);
-    } else {
-      // Dynamic length: compute size at runtime
-      Value *TotalSize = Builder.CreateMul(LenVal, Builder.getInt64(ElemSize));
-      emitMemsetCall(Builder, Dest, TotalSize, DestAS);
-    }
+    emitMemsetCall(Builder, Dest, LenVal, DestAS);
   } else {
     // Need to generate helper function for proper pointer zeroing
+    LLVM_DEBUG(dbgs() << "  Using sigmemset helper function for type: " << *ElemTy << "\n");
+    LLVM_DEBUG(dbgs() << "  Length value: " << *LenVal << "\n");
+    if (auto *LenCI = dyn_cast<ConstantInt>(LenVal)) {
+      uint64_t bytelen = LenCI->getZExtValue();
+      uint64_t elementsize = bytelen / (uint64_t)DL->getTypeAllocSize(ElemTy);
+      LenVal = Builder.getInt64(elementsize);
+    } else {
+      uint64_t elementsize = (uint64_t)DL->getTypeAllocSize(ElemTy);
+      Value *ElemSizeVal = Builder.getInt64(elementsize);
+      LenVal = Builder.CreateUDiv(LenVal, ElemSizeVal, "elem.len");
+    }
     Function *HelperF = getOrCreateMemsetFunc(ElemTy, DestAS);
     Builder.CreateCall(HelperF, {Dest, LenVal});
   }
@@ -746,7 +981,7 @@ bool RISCVSigMemcpyExpand::expandSigMemset(IntrinsicInst *II) {
 bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   // Check if we should run this pass
   auto &TPC = getAnalysis<TargetPassConfig>();
-    const TargetMachine &TM = TPC.getTM<TargetMachine>();
+  const TargetMachine &TM = TPC.getTM<TargetMachine>();
   
   bool SigModeEnabled = false;
   for (Function &F : M) {
@@ -771,38 +1006,75 @@ bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   
   bool Changed = false;
   
-  // Collect all sigmemcpy and sigmemset calls first (to avoid iterator invalidation)
-  SmallVector<IntrinsicInst *, 16> SigMemcpyCalls;
-  SmallVector<IntrinsicInst *, 16> SigMemsetCalls;
+  //===--------------------------------------------------------------------===//
+  // Phase 1: Type Recovery and Memcpy/Memset Conversion
+  //===--------------------------------------------------------------------===//
   
+  LLVM_DEBUG(dbgs() << "=== Phase 1: Type Recovery ===\n");
+  
+  //===--------------------------------------------------------------------===//
+  // Phase 2: Collect and Expand SigMemcpy/SigMemset Intrinsics
+  //===--------------------------------------------------------------------===//
+  
+  LLVM_DEBUG(dbgs() << "=== Phase 2: Expand SigMemcpy/SigMemset ===\n");
+  
+  // Collect all sigmemcpy and sigmemset calls (including newly converted ones)
+  SmallVector<CallInst *, 16> SigMemcpyCalls;
+  SmallVector<CallInst *, 16> SigMemsetCalls;
+  
+  SmallVector<Function*, 0> FunctionsToProcess;
   for (Function &F : M) {
     if (F.isDeclaration())
       continue;
     
+    bool HasSigMemcpyOrMemset = false;
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
-        if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
+        if (auto *II = dyn_cast<CallInst>(&I)) {
           // Check by intrinsic name since it's an overloaded intrinsic
-          StringRef Name = II->getCalledFunction()->getName();
-          if (Name.starts_with("llvm.riscv.xsig.memcpy")) {
+          Function* call_func = II->getCalledFunction();
+          if (!call_func)
+            continue;
+          StringRef Name = call_func->getName();
+          if (Name.starts_with("llvm.memcpy") || Name == "memcpy") {
             SigMemcpyCalls.push_back(II);
-          } else if (Name.starts_with("llvm.riscv.xsig.memset")) {
+            HasSigMemcpyOrMemset = true;
+          } else if (Name.starts_with("llvm.memset") || Name == "memset") {
             SigMemsetCalls.push_back(II);
+            HasSigMemcpyOrMemset = true;
           }
         }
       }
     }
+
+    if (HasSigMemcpyOrMemset) {
+      FunctionsToProcess.push_back(&F);
+    }
   }
   
+  LLVM_DEBUG(dbgs() << "Found " << SigMemcpyCalls.size() << " sigmemcpy calls\n");
+  LLVM_DEBUG(dbgs() << "Found " << SigMemsetCalls.size() << " sigmemset calls\n");
+
+  if (SigMemcpyCalls.empty() && SigMemsetCalls.empty()) {
+    LLVM_DEBUG(dbgs() << "No sigmemcpy or sigmemset calls found, skipping expansion\n");
+    return false;
+  }
+
+  // Run type recovery to infer types for all values
+  runTypeRecovery(FunctionsToProcess);
+  
   // Expand each sigmemcpy call
-  for (IntrinsicInst *II : SigMemcpyCalls) {
+  for (CallInst *II : SigMemcpyCalls) {
     Changed |= expandSigMemcpy(II);
   }
   
   // Expand each sigmemset call
-  for (IntrinsicInst *II : SigMemsetCalls) {
+  for (CallInst *II : SigMemsetCalls) {
     Changed |= expandSigMemset(II);
   }
+  
+  // Clean up type recovery
+  TR.reset();
   
   return Changed;
 }

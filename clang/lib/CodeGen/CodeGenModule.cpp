@@ -67,6 +67,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "PointeeTypeAnnotator.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/xxhash.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
@@ -483,6 +484,10 @@ CodeGenModule::CodeGenModule(ASTContext &C,
     // otherwise disabled. Use a temporary CGDebugInfo instance to emit only
     // basic compiler metadata.
     CGDebugInfo(*this);
+
+  // Create the pointee type annotator if SigMode is supported.
+  if (Context.getTargetInfo().isSigModeSupported())
+    PointeeAnnotator.reset(new PointeeTypeAnnotator(*this));
 
   Block.GlobalUniqueCount = 0;
 
@@ -6151,6 +6156,10 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   if (CGDebugInfo *DI = getModuleDebugInfo())
     if (getCodeGenOpts().hasReducedDebugInfo())
       DI->EmitGlobalVariable(GV, D);
+
+  // Annotate global variable with pointee type information.
+  if (PointeeTypeAnnotator *PTA = getPointeeAnnotator())
+    PTA->annotateGlobalVariable(GV, D->getType());
 }
 
 static bool isVarDeclStrongDefinition(const ASTContext &Context,

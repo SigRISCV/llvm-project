@@ -307,6 +307,8 @@ public:
 
   bool containsPointer() const;
 
+  bool isPointerOnlyType() const;
+
   /// Return true if it makes sense to take the size of this type. To get the
   /// actual size for a particular target, it is reasonable to use the
   /// DataLayout subsystem to do this.

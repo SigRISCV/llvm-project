@@ -22,6 +22,7 @@
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
 #include "CodeGenPGO.h"
+#include "PointeeTypeAnnotator.h"
 #include "TargetInfo.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
@@ -6001,6 +6002,21 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
                               BundleList);
     EmitBlock(Cont);
   }
+
+  // Annotate external function declarations with sigmode metadata.
+  // Only annotate when the callee is an external function (declaration without body).
+  if (llvm::Function *CalledFn = CI->getCalledFunction()) {
+    if (CalledFn->isDeclaration() && !CalledFn->hasMetadata("sigmode.func")) {
+      if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl)) {
+        PointeeTypeAnnotator *PTA = CGM.getPointeeAnnotator();
+        if (PTA && PTA->isEnabled()) {
+          QualType FuncTy = FD->getType();
+          PTA->annotateFunction(CalledFn, FuncTy, CallInfo);
+        }
+      }
+    }
+  }
+
   if (CI->getCalledFunction() && CI->getCalledFunction()->hasName() &&
       CI->getCalledFunction()->getName().starts_with("_Z4sqrt")) {
     SetSqrtFPAccuracy(CI);
