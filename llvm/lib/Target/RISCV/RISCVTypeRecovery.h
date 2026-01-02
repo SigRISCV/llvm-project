@@ -148,6 +148,8 @@ public:
   /// Looks up existing in map first, creates if not found
   MDNode *getOrCreateArrayOfTypeMD(MDNode *ElementMD, uint64_t NumElements);
 
+  void getFieldMDNodeFromOffset(MDNode* MD, uint64_t Offset, TypeSet &typeset);
+
   /// Check if metadata represents a struct type
   static bool isStructTypeMD(MDNode *MD);
 

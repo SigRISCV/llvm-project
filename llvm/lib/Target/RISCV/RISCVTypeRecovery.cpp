@@ -403,6 +403,48 @@ MDNode *TypeRecovery::getOrCreateArrayOfTypeMD(MDNode *ElementMD, uint64_t NumEl
   return NewMD;
 }
 
+void TypeRecovery::getFieldMDNodeFromOffset(MDNode* MD, uint64_t Offset, TypeSet &typeset) {
+  if (!MD)
+    return;
+
+  Type* Ty = getLLVMTypeFromMD(MD);
+  if (!Ty)
+    return;
+
+  uint64_t TypeSize = Mod.getDataLayout().getTypeAllocSize(Ty);
+  if (TypeSize == 0)
+    return;
+  
+  Offset = Offset % TypeSize;
+  if (Offset == 0) {
+    typeset.insert(MD);
+  }
+  if (Ty->isStructTy()) {
+    StructType* ST = dyn_cast<StructType>(Ty);
+    const DataLayout& DL = Mod.getDataLayout();
+    for (unsigned i = 0; i < ST->getNumElements(); ++i) {
+      Type* FieldTy = ST->getElementType(i);
+      uint64_t FieldOffset = DL.getStructLayout(ST)->getElementOffset(i);
+      if (Offset >= FieldOffset && Offset < FieldOffset + DL.getTypeAllocSize(FieldTy)) {
+        MDNode* FieldMD = getStructFieldTypeMD(MD, i);
+        if (FieldMD) {
+          getFieldMDNodeFromOffset(FieldMD, Offset - FieldOffset, typeset);
+        }
+      }
+    }
+  } else if (Ty->isArrayTy()) {
+    ArrayType* AT = dyn_cast<ArrayType>(Ty);
+    const DataLayout& DL = Mod.getDataLayout();
+    Type* ElemTy = AT->getElementType();
+    uint64_t ElemSize = DL.getTypeAllocSize(ElemTy);
+    uint64_t offset = Offset % ElemSize;
+    MDNode* ElemMD = getArrayElementTypeMD(MD);
+    if (ElemMD) {
+      getFieldMDNodeFromOffset(ElemMD, Offset, typeset);
+    }
+  }
+}
+
 Type *TypeRecovery::getLLVMTypeFromMD(MDNode *MD) {
   if (!MD || MD->getNumOperands() < 1)
     return nullptr;
@@ -895,9 +937,32 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
   // The result inherits the base pointer's type
   if (SourceElemTy->isIntegerTy(8)) {
     if (BaseTypes) {
-      if (unionTypes(GEP, *BaseTypes)) {
-        NextWorklist.insert(GEP);
-        return true;
+      auto Iter = GEP->idx_begin();
+      auto Offset = dyn_cast<ConstantInt>(*Iter);
+      if (!Offset) {
+        if (unionTypes(GEP, *BaseTypes)) {
+          NextWorklist.insert(GEP);
+          return true;
+        }
+      } else {
+        // If Offset is a constant, we need to handle it
+        bool changed = false;
+        for (MDNode* BaseMD : *BaseTypes) {
+          TypeSet FieldTypes;
+          MDNode* BasePointeeMD = getPointeeTypeMD(BaseMD);
+          if (!BasePointeeMD)
+            continue;
+          getFieldMDNodeFromOffset(BasePointeeMD, Offset->getZExtValue(), FieldTypes);
+          for (MDNode* FT : FieldTypes) {
+            MDNode* PtrToFT = getOrCreatePtrToTypeMD(FT);
+            if (PtrToFT) {
+              if (addType(GEP, PtrToFT)) {
+                changed = true;
+              }
+            }
+          }
+        }
+        return changed;
       }
     }
     return false;
@@ -1028,6 +1093,7 @@ bool TypeRecovery::propagateBackward(Value *V) {
 bool TypeRecovery::backpropLoad(LoadInst *LI) {
   // %q = load ptr, ptr %p
   // If %q's type is known (T), then %p's type is ptr-to-T
+  return false;
   
   const TypeSet *ResultTypes = getTypeSet(LI);
   if (!ResultTypes || ResultTypes->empty())
@@ -1061,13 +1127,15 @@ bool TypeRecovery::backpropStore(StoreInst *SI) {
   }
   
   // Forward: val type -> dest type
-  const TypeSet *ValTypes = getTypeSet(Val);
-  if (ValTypes) {
-    for (MDNode *ValMD : *ValTypes) {
-      MDNode *DestMD = getOrCreatePtrToTypeMD(ValMD);
-      if (DestMD && addType(Dest, DestMD)) {
-        NextWorklist.insert(Dest);
-        Changed = true;
+  while(0) {
+    const TypeSet *ValTypes = getTypeSet(Val);
+    if (ValTypes) {
+      for (MDNode *ValMD : *ValTypes) {
+        MDNode *DestMD = getOrCreatePtrToTypeMD(ValMD);
+        if (DestMD && addType(Dest, DestMD)) {
+          NextWorklist.insert(Dest);
+          Changed = true;
+        }
       }
     }
   }
@@ -1279,9 +1347,29 @@ bool TypeRecovery::backpropGEP(GetElementPtrInst *GEP) {
   // The result inherits the base pointer's type
   if (SourceElemTy->isIntegerTy(8)) {
     if (GEPSet) {
-      if (unionTypes(BasePtr, *GEPSet)) {
-        NextWorklist.insert(BasePtr);
-        return true;
+      auto Iter = GEP->idx_begin();
+      auto Offset = dyn_cast<ConstantInt>(*Iter);
+      if (!Offset) {
+        if (unionTypes(BasePtr, *GEPSet)) {
+          NextWorklist.insert(BasePtr);
+          return true;
+        }
+      } else {
+        bool changed = false;
+        for (MDNode* GEPMD : *GEPSet) {
+          MDNode* BasePointeeMD = getPointeeTypeMD(GEPMD);
+          if (!BasePointeeMD) continue;
+          Type* BasePointeeTy = getLLVMTypeFromMD(BasePointeeMD);
+          if (!BasePointeeTy) continue;
+          uint64_t typesize = Mod.getDataLayout().getTypeAllocSize(BasePointeeTy);
+          if (typesize == 0) continue;
+          if (Offset->getZExtValue() % typesize != 0) continue;
+          if (addType(BasePtr, GEPMD)) {
+            NextWorklist.insert(BasePtr);
+            changed = true;
+          }
+        }
+        return changed;
       }
     }
     return false;
