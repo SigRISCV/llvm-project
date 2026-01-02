@@ -32,9 +32,11 @@
 #include "RISCVSubtarget.h"
 #include "RISCVTargetMachine.h"
 #include "RISCVTypeRecovery.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -44,6 +46,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
@@ -118,8 +121,14 @@ private:
 
   Type *selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size);
 
-  SmallPtrSet<MDNode *, 4> filterBareAndSimplePointeeTypes(
+  SmallPtrSet<MDNode *, 4> filterComplexTypes(
       const SmallPtrSet<MDNode *, 4> &Types);
+
+  SmallPtrSet<MDNode *, 4> filterBareAndArrayPointeeTypes(
+      const SmallPtrSet<MDNode *, 4> &Types);
+
+  SmallPtrSet<MDNode *, 4> filterSubSetTypes(
+    const SmallPtrSet<MDNode *, 4> &Types);
 
   std::string getMangledTypeName(Type *Ty);
 
@@ -266,10 +275,8 @@ static bool isBarePointerTypeMD(MDNode *MD) {
   return Undef->getType()->isPointerTy() && MD->getNumOperands() == 1;
 }
 
-/// Filter out bare "ptr undef" types from a type set
-/// Returns the filtered set
-SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndSimplePointeeTypes(
-    const SmallPtrSet<MDNode *, 4> &Types) {
+SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterComplexTypes(
+      const SmallPtrSet<MDNode *, 4> &Types) {
   static MDNode* PtrVoidMD = nullptr;
   static MDNode* Int8MD = nullptr;
   if (!PtrVoidMD) {
@@ -282,6 +289,33 @@ SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndSimplePointeeTypes(
     assert(Int8MD && "i8 type metadata not found");
   }
 
+  SmallPtrSet<MDNode *, 4> SimpleTypes;
+
+  for (MDNode *MD : Types) {
+    Type* LLVMType = TR->getLLVMTypeFromMD(MD);
+    if (!LLVMType->containsPointer()) {
+      SimpleTypes.insert(Int8MD);
+    } else if (LLVMType->isPointerOnlyType()) {
+      SimpleTypes.insert(PtrVoidMD);
+    } else {
+      SimpleTypes.insert(MD);
+    }
+  }
+
+  return SimpleTypes;
+
+}
+
+/// Filter out bare "ptr undef" types from a type set
+/// Returns the filtered set
+SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndArrayPointeeTypes(
+    const SmallPtrSet<MDNode *, 4> &Types) {
+  static MDNode* PtrVoidMD = nullptr;
+  if (!PtrVoidMD) {
+    PtrVoidMD = TR->lookupTypeByString("void*");
+    assert(PtrVoidMD && "ptr_to_void type metadata not found");
+  }
+
   SmallPtrSet<MDNode *, 4> Filtered;
   for (MDNode *MD : Types) {
     if (!TR->isPointerTypeMD(MD))
@@ -292,16 +326,60 @@ SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterBareAndSimplePointeeTypes(
     while (TR->isArrayTypeMD(PointeeMD)) {
       PointeeMD = TR->getArrayElementTypeMD(PointeeMD);
     }
-    Type* LLVMType = TR->getLLVMTypeFromMD(PointeeMD);
-    if (!LLVMType->containsPointer()) {
-      Filtered.insert(Int8MD);
-    } else if (LLVMType->isPointerOnlyType()) {
-      Filtered.insert(PtrVoidMD);
-    } else {
-      Filtered.insert(PointeeMD);
-    }
+    Filtered.insert(PointeeMD);
   }
   return Filtered;
+}
+
+SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterSubSetTypes(
+    const SmallPtrSet<MDNode *, 4> &Types) {
+  SmallVector<MDNode *, 4> TypeList;
+  for (MDNode *MD : Types) {
+    TypeList.push_back(MD);
+  }
+
+  llvm::sort(TypeList, [&](MDNode *A, MDNode *B) {
+    Type *TyA = TR->getLLVMTypeFromMD(A);
+    Type *TyB = TR->getLLVMTypeFromMD(B);
+    if (!TyA || !TyB)
+      return TyA > TyB;
+    return DL->getTypeAllocSize(TyA) > DL->getTypeAllocSize(TyB);
+  });
+
+  SmallPtrSet<MDNode *, 4> ExtendSet;
+  for (MDNode *MD : TypeList) {
+    MDNode *Current = MD;
+    ExtendSet.insert(Current);
+    while (TR->isStructTypeMD(Current) || TR->isArrayTypeMD(Current)) {
+      if (TR->isArrayTypeMD(Current)) {
+        Current = TR->getArrayElementTypeMD(Current);
+      } else {
+        Current = TR->getStructFieldTypeMD(Current, 0);
+      }
+      while (TR->isArrayTypeMD(Current)) {
+        Current = TR->getArrayElementTypeMD(Current);
+      }
+      if (!Current) break;
+      ExtendSet.insert(Current);
+    }
+  }
+
+  for (MDNode *MD : TypeList) {
+    MDNode *Current = MD;
+    while (TR->isStructTypeMD(Current) || TR->isArrayTypeMD(Current)) {
+      if (TR->isArrayTypeMD(Current)) {
+        Current = TR->getArrayElementTypeMD(Current);
+      } else {
+        Current = TR->getStructFieldTypeMD(Current, 0);
+      }
+      while (TR->isArrayTypeMD(Current)) {
+        Current = TR->getArrayElementTypeMD(Current);
+      }
+      if (!Current) break;
+      ExtendSet.erase(Current);
+    }
+  }
+  return ExtendSet;
 }
 
 Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size) {
@@ -309,11 +387,16 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
   std::string SrcLoc = TypeRecovery::getSourceLocation(I);
   std::string LocStr = SrcLoc.empty() ? "" : " at " + SrcLoc;
 
+  LLVM_DEBUG(dbgs() << "Dest Types for memcpy/memset" << LocStr << ":\n");
+  for (MDNode *MD : *DestTypes) {
+    LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
+  }
+
   // Convert to SmallPtrSet and filter out bare ptr undef
   SmallPtrSet<MDNode *, 4> Types;
   for (MDNode *MD : *DestTypes)
     Types.insert(MD);
-  Types = filterBareAndSimplePointeeTypes(Types);
+  Types = filterBareAndArrayPointeeTypes(Types);
   
   if (Types.empty()) {
     LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memset\n");
@@ -322,57 +405,93 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
     return nullptr;
   }
 
-  Type *BestType = nullptr;
+  bool no_offset = Size == maxUIntN(uint64_t(64));
+  SmallPtrSet<MDNode *, 4> candidateTypes;
   
-  if (Types.size() == 1) {
-    // Single type - use it
-    MDNode *MD = *Types.begin();
-    BestType = TR->getLLVMTypeFromMD(MD);
-    if (!TR->isUnionTypeMD(MD)) {
-      return BestType;
+  for (MDNode *PointeeMD : Types) {
+    if (!PointeeMD)
+      continue;
+    Type *Ty = TR->getLLVMTypeFromMD(PointeeMD);
+    if (!Ty)
+      continue;
+    
+    uint64_t TySize = DL->getTypeAllocSize(Ty);
+    // Check if Size is a multiple of TySize
+    if (no_offset) {
+      candidateTypes.insert(PointeeMD);
+    } else if (Size % TySize == 0) {
+      candidateTypes.insert(PointeeMD);
+    }
+  }
+
+  LLVM_DEBUG(dbgs() << "Candidate Types for memcpy/memset" << LocStr << ":\n");
+  for (MDNode *MD : candidateTypes) {
+    LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
+  }
+
+  SmallPtrSet<MDNode *, 4> NoSubSetTypes;
+  if (candidateTypes.size() > 1 && !no_offset) {
+    NoSubSetTypes = filterSubSetTypes(candidateTypes);
+    candidateTypes = NoSubSetTypes;
+  }
+
+  LLVM_DEBUG(dbgs() << "NoSubSet Types for memcpy/memset" << LocStr << ":\n");
+  for (MDNode *MD : NoSubSetTypes) {
+    LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
+  }
+
+  SmallPtrSet<MDNode *, 4> SimpleTypes = filterComplexTypes(candidateTypes);
+
+  LLVM_DEBUG(dbgs() << "Simple Types for memcpy/memset" << LocStr << ":\n");
+  for (MDNode *MD : SimpleTypes) {
+    LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
+  }
+
+  Type* BestType = nullptr;
+  MDNode* OnlyMD = nullptr;
+  bool cannot_determined = false;
+
+  for (MDNode *MD : SimpleTypes) {
+    Type *Ty = TR->getLLVMTypeFromMD(MD);
+    if (!BestType || DL->getTypeAllocSize(Ty) > DL->getTypeAllocSize(BestType)) {
+      BestType = Ty;
+      OnlyMD = MD;
+    }
+  }
+
+  if (SimpleTypes.size() > 1) {
+    cannot_determined = true;
+  } else if (SimpleTypes.size() == 1) {
+    if (TR->isUnionTypeMD(OnlyMD)) {
+      cannot_determined = true;
     }
   } else {
-    for (MDNode *PointeeMD : Types) {
-      if (!PointeeMD)
-        continue;
-      Type *Ty = TR->getLLVMTypeFromMD(PointeeMD);
-      if (!Ty)
-        continue;
-      
-      uint64_t TySize = DL->getTypeAllocSize(Ty);
-      // Check if Size is a multiple of TySize
-      if (Size == maxUIntN(uint64_t(64))) {
-        // Unknown size - prefer larger types
-        if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
-          BestType = Ty;
-        }
-        continue;
-      } else if (Size % TySize == 0) {
-        if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
-          BestType = Ty;
-        }
-        continue;
-      }
-    }
+    cannot_determined = true;
   }
   
   // Multiple types - emit warning with details and select by size
-  LLVM_DEBUG(dbgs() << "  Warning: types cannot determined (" << Types.size() 
-                    << ") for memcpy/memset, selecting by size\n");
-  errs() << "Warning: memcpy/memset has multiple candidate types or union types (" << Types.size()
-         << ")" << LocStr << ":\n";
-  for (MDNode *MD : Types) {
-    errs() << "  - " << TR->getTypeString(MD) << "\n";
-  }
-  errs() << "More details on candidate types:\n";
-  for (MDNode *MD : *DestTypes) {
-    errs() << "  - " << TR->getTypeString(MD) << "\n";
-  }
-  
-  if (BestType) {
-    errs() << "  Selected type for memset: " << TR->getLLVMTypeString(BestType) << "\n";
-  } else {
-    errs() << "Warning: memset could not determine element type from candidates" 
+  if (cannot_determined && BestType) {
+    LLVM_DEBUG(dbgs() << "  Warning: types cannot determined (" << Types.size() 
+                      << ") for memcpy/memset, selecting by size\n");
+    errs() << "Warning: memcpy/memset has multiple candidate types or union types (" << Types.size()
+          << ")" << LocStr << ":\n";
+    for (MDNode *MD : SimpleTypes) {
+      errs() << "  - " << TR->getTypeString(MD) << "\n";
+    }
+    errs() << "More details on candidate types:\n";
+    for (MDNode *MD : candidateTypes) {
+      errs() << "  - " << TR->getTypeString(MD) << "\n";
+    }
+    
+    if (BestType) {
+      errs() << "  Selected type for memset: " << TR->getLLVMTypeString(BestType) << "\n";
+    } else {
+      errs() << "Warning: memset could not determine element type from candidates" 
+            << LocStr << "\n";
+    }
+  } else if (!BestType) {
+    LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memset\n");
+    errs() << "Warning: memset destination has only bare pointer type, no concrete type" 
            << LocStr << "\n";
   }
   

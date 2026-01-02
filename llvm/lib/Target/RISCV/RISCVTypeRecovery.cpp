@@ -990,8 +990,15 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
             }
           }
         } else {
-          if (addType(GEP, PtrStructMD)) {
-            Changed = true;
+          TypeSet FieldTypes;
+          getFieldMDNodeFromOffset(StructMD, 0, FieldTypes);
+          for (MDNode* FT : FieldTypes) {
+            MDNode* PtrToFT = getOrCreatePtrToTypeMD(FT);
+            if (PtrToFT) {
+              if (addType(GEP, PtrToFT)) {
+                Changed = true;
+              }
+            }
           }
         }
       }
@@ -1012,8 +1019,15 @@ bool TypeRecovery::handleGEP(GetElementPtrInst *GEP) {
               }
             }
           } else {
-            if (addType(GEP, BaseMD)) {
-              Changed = true;
+            TypeSet FieldTypes;
+            getFieldMDNodeFromOffset(PointeeMD, 0, FieldTypes);
+            for (MDNode* FT : FieldTypes) {
+              MDNode* PtrToFT = getOrCreatePtrToTypeMD(FT);
+              if (PtrToFT) {
+                if (addType(GEP, PtrToFT)) {
+                  Changed = true;
+                }
+              }
             }
           }
         }
@@ -1352,21 +1366,21 @@ bool TypeRecovery::backpropGEP(GetElementPtrInst *GEP) {
           return true;
         }
       } else {
-        bool changed = false;
-        for (MDNode* GEPMD : *GEPSet) {
-          MDNode* BasePointeeMD = getPointeeTypeMD(GEPMD);
-          if (!BasePointeeMD) continue;
-          Type* BasePointeeTy = getLLVMTypeFromMD(BasePointeeMD);
-          if (!BasePointeeTy) continue;
-          uint64_t typesize = Mod.getDataLayout().getTypeAllocSize(BasePointeeTy);
-          if (typesize == 0) continue;
-          if (Offset->getZExtValue() % typesize != 0) continue;
-          if (addType(BasePtr, GEPMD)) {
-            NextWorklist.insert(BasePtr);
-            changed = true;
-          }
-        }
-        return changed;
+        // bool changed = false;
+        // for (MDNode* GEPMD : *GEPSet) {
+        //   MDNode* BasePointeeMD = getPointeeTypeMD(GEPMD);
+        //   if (!BasePointeeMD) continue;
+        //   Type* BasePointeeTy = getLLVMTypeFromMD(BasePointeeMD);
+        //   if (!BasePointeeTy) continue;
+        //   uint64_t typesize = Mod.getDataLayout().getTypeAllocSize(BasePointeeTy);
+        //   if (typesize == 0) continue;
+        //   if (Offset->getZExtValue() % typesize != 0) continue;
+        //   if (addType(BasePtr, GEPMD)) {
+        //     NextWorklist.insert(BasePtr);
+        //     changed = true;
+        //   }
+        // }
+        // return changed;
       }
     }
     return false;
