@@ -112,6 +112,18 @@ public:
   // MDNode Helper Functions (using the type map)
   //===--------------------------------------------------------------------===//
 
+  bool isVoidTypeMD(MDNode *MD);
+
+  bool isUnionTypeMD(MDNode *MD);
+
+  /// Check if a metadata node represents a function type
+  /// Format: !{ptr undef, !{param0, param1, ...}}
+  bool isFunctionPointerTypeMD(MDNode *MD);
+
+  /// Get the function type metadata from a function type metadata node
+  /// Format: !{ptr undef, !{param0, param1, ...}}
+  MDNode* getFunctionTypeMD(MDNode *MD);
+
   /// Check if a metadata node represents a pointer type
   /// Format: !{ptr undef, !pointee_type}
   static bool isPointerTypeMD(MDNode *MD);

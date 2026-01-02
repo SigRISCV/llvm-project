@@ -216,6 +216,51 @@ void TypeRecovery::collectMetadataRecursive(MDNode *MD) {
 // MDNode Helper Functions
 //===----------------------------------------------------------------------===//
 
+bool TypeRecovery::isVoidTypeMD(MDNode *MD) {
+  Type* Ty = getLLVMTypeFromMD(MD);
+  if (!Ty)
+    return false;
+
+  return Ty->isVoidTy();
+}
+
+bool TypeRecovery::isUnionTypeMD(MDNode *MD) {
+  Type* Ty = getLLVMTypeFromMD(MD);
+  if (!Ty)
+    return false;
+
+  if (!Ty->isStructTy())
+    return false;
+  StringRef StructName = Ty->getStructName();
+  std::string Name = StructName.str();
+  if (Name.substr(0, 6) == "union.")
+    return true;
+  return false;
+}
+
+bool TypeRecovery::isFunctionPointerTypeMD(MDNode *MD) {
+
+  MDNode *PointeeMD = getPointeeTypeMD(MD);
+  if (!PointeeMD)
+    return false;
+
+  if (PointeeMD->getNumOperands() < 1)
+    return false;
+
+  Type* Ty = getLLVMTypeFromMD(PointeeMD);
+  if (!Ty)
+    return true;
+
+  return false;
+}
+
+MDNode* TypeRecovery::getFunctionTypeMD(MDNode *MD) {
+  if (!isFunctionPointerTypeMD(MD))
+    return nullptr;
+
+  return getPointeeTypeMD(MD);
+}
+
 bool TypeRecovery::isPointerTypeMD(MDNode *MD) {
   if (!MD || MD->getNumOperands() < 1)
     return false;
@@ -643,12 +688,29 @@ bool TypeRecovery::addType(Value *V, MDNode *MD) {
 
   if (dyn_cast<Constant>(V)) {
     return false;
-  } 
-  
+  }
+
   auto TSor = TypeMap.find(V);
   if (TSor == TypeMap.end()) {
     return false;
   }
+
+  if (isStructTypeMD(MD) || isArrayTypeMD(MD)) {
+    return false;
+  }
+  if (V->getType()->isPointerTy()) {
+    if (!isPointerTypeMD(MD)) {
+      return false;
+    } else {
+      MDNode *PointeeMD = getPointeeTypeMD(MD);
+      if (PointeeMD && PointeeMD != lookupTypeByString("void*")) {
+        if (TSor->second.count(PointeeMD) > 0) {
+          return false;
+        }
+      }
+    }
+  }
+
   return TSor->second.insert(MD).second;  // Returns true if newly inserted
 }
 
@@ -707,6 +769,9 @@ bool TypeRecovery::handleLoad(LoadInst *LI) {
   // load ptr, ptr %p  =>  result is pointee of %p's pointee type
   // If %p has type "ptr to T", then load result has type "T"
   
+  if (!LI->getType()->isPointerTy())
+    return false;
+
   Value *Ptr = LI->getPointerOperand();
   const TypeSet *PtrTypes = getTypeSet(Ptr);
   if (!PtrTypes)
@@ -717,6 +782,9 @@ bool TypeRecovery::handleLoad(LoadInst *LI) {
     // PtrMD should be the type of %p (a pointer type)
     // We need the pointee type
     if (MDNode *PointeeMD = getPointeeTypeMD(PtrMD)) {
+      if (!isPointerTypeMD(PointeeMD)) {
+        continue;
+      }
       if (addType(LI, PointeeMD)) {
         NextWorklist.insert(LI);
         Changed = true;
@@ -983,6 +1051,10 @@ bool TypeRecovery::backpropStore(StoreInst *SI) {
   Value *Val = SI->getValueOperand();
   Value *Dest = SI->getPointerOperand();
   bool Changed = false;
+
+  if (!Val->getType()->isPointerTy()) {
+    return false;
+  }
   
   // Forward: val type -> dest type
   const TypeSet *ValTypes = getTypeSet(Val);
@@ -1001,6 +1073,9 @@ bool TypeRecovery::backpropStore(StoreInst *SI) {
   if (DestTypes) {
     for (MDNode *DestMD : *DestTypes) {
       if (MDNode *PointeeMD = getPointeeTypeMD(DestMD)) {
+        if (!isPointerTypeMD(PointeeMD)) {
+          continue;
+        }
         if (addType(Val, PointeeMD)) {
           NextWorklist.insert(Val);
           Changed = true;
@@ -1050,12 +1125,15 @@ bool TypeRecovery::backpropSelect(SelectInst *SI) {
 
 bool TypeRecovery::backpropCall(CallBase *CB) {
   // Get function metadata - either from direct callee or indirect call's func ptr
-  MDNode *FuncMD = nullptr;
+  SmallVector<MDNode *, 0> FuncMDList;
   Function *Callee = CB->getCalledFunction();
   
   if (Callee) {
     // Direct call: get metadata from callee function
-    FuncMD = Callee->getMetadata("sigmode.func");
+    MDNode* MD = Callee->getMetadata("sigmode.func");
+    if (MD && isFunctionPointerTypeMD(MD)) {
+      FuncMDList.push_back(getFunctionTypeMD(MD));
+    }
   } else {
     // Indirect call: try to get metadata from function pointer's type
     Value *CalledValue = CB->getCalledOperand();
@@ -1063,55 +1141,51 @@ bool TypeRecovery::backpropCall(CallBase *CB) {
     if (FuncPtrTypes && !FuncPtrTypes->empty()) {
       // Function pointer should have type "ptr to func"
       // The metadata format is !{ptr undef, !{ret_type, param_types...}}
-      MDNode *FuncPtrMD = *FuncPtrTypes->begin();
-      if (isPointerTypeMD(FuncPtrMD)) {
-        FuncMD = getPointeeTypeMD(FuncPtrMD);
+      for (MDNode *MD : *FuncPtrTypes) {
+        MDNode *PointeeMD = getPointeeTypeMD(MD);
+        if (PointeeMD && isFunctionPointerTypeMD(PointeeMD)) {
+          FuncMDList.push_back(getFunctionTypeMD(PointeeMD));
+        }
       }
     }
   }
-  
-  if (!FuncMD || FuncMD->getNumOperands() < 2)
-    return false;
-  
-  // Format: !{ptr undef, !{ret_type, param_types...}} for func ptr
-  // Or direct !{ret_type, param_types...} for func type
-  MDNode *TypesMD = nullptr;
-  if (isPointerTypeMD(FuncMD)) {
-    // This is a function pointer metadata, get the pointee (func type)
-    TypesMD = getPointeeTypeMD(FuncMD);
-  } else {
-    // This is already the function type metadata
-    TypesMD = FuncMD;
-  }
-  
-  if (!TypesMD || TypesMD->getNumOperands() < 1)
-    return false;
-  
+
   bool Changed = false;
-  
-  // First element is return type
-  if (auto *RetTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(0))) {
-    if (!CB->getType()->isVoidTy() && addType(CB, RetTypeMD)) {
-      NextWorklist.insert(CB);
-      Changed = true;
-    }
-  }
-  
-  // Propagate parameter types to arguments
-  // Skip the first element (return type), remaining are parameter types
-  unsigned NumParams = TypesMD->getNumOperands() - 1;
-  unsigned NumArgs = CB->arg_size();
-  
-  // Only propagate for non-variadic part (min of formal params and actual args)
-  unsigned PropCount = std::min(NumParams, NumArgs);
-  
-  for (unsigned I = 0; I < PropCount; ++I) {
-    unsigned MDIdx = I + 1;  // +1 to skip return type
-    if (auto *ParamTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
-      Value *Arg = CB->getArgOperand(I);
-      if (addType(Arg, ParamTypeMD)) {
-        NextWorklist.insert(Arg);
+
+  for (MDNode* FuncMD : FuncMDList) {
+    // Format: !{ptr undef, !{ret_type, param_types...}} for func ptr
+    // Or direct !{ret_type, param_types...} for func type
+    MDNode *TypesMD = FuncMD;
+    DEBUG_FILE << getTypeString(TypesMD) << "\n";
+    
+    if (!TypesMD || TypesMD->getNumOperands() < 1)
+      return false;
+    
+    // First element is return type
+    if (auto *RetTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(0))) {
+      if (!isVoidTypeMD(RetTypeMD) && !CB->getType()->isVoidTy() && addType(CB, RetTypeMD)) {
+        NextWorklist.insert(CB);
         Changed = true;
+      }
+    }
+    
+    // Propagate parameter types to arguments
+    // Skip the first element (return type), remaining are parameter types
+    unsigned NumParams = TypesMD->getNumOperands() - 1;
+    unsigned NumArgs = CB->arg_size();
+    
+    // Only propagate for non-variadic part (min of formal params and actual args)
+    unsigned PropCount = std::min(NumParams, NumArgs);
+    
+    for (unsigned I = 0; I < PropCount; ++I) {
+      unsigned MDIdx = I + 1;  // +1 to skip return type
+      if (auto *ParamTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
+        Value *Arg = CB->getArgOperand(I);
+        DEBUG_FILE << getTypeString(ParamTypeMD) << "\n";
+        if (addType(Arg, ParamTypeMD)) {
+          NextWorklist.insert(Arg);
+          Changed = true;
+        }
       }
     }
   }

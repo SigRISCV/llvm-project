@@ -321,18 +321,45 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
            << LocStr << "\n";
     return nullptr;
   }
+
+  Type *BestType = nullptr;
   
   if (Types.size() == 1) {
     // Single type - use it
     MDNode *MD = *Types.begin();
-    // Get the pointee type (since dest is a pointer)
-    return TR->getLLVMTypeFromMD(MD);
+    BestType = TR->getLLVMTypeFromMD(MD);
+    if (TR->isUnionTypeMD(MD)) {
+      return BestType;
+    }
+  } else {
+    for (MDNode *PointeeMD : Types) {
+      if (!PointeeMD)
+        continue;
+      Type *Ty = TR->getLLVMTypeFromMD(PointeeMD);
+      if (!Ty)
+        continue;
+      
+      uint64_t TySize = DL->getTypeAllocSize(Ty);
+      // Check if Size is a multiple of TySize
+      if (Size == maxUIntN(uint64_t(64))) {
+        // Unknown size - prefer larger types
+        if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
+          BestType = Ty;
+        }
+        continue;
+      } else if (Size % TySize == 0) {
+        if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
+          BestType = Ty;
+        }
+        continue;
+      }
+    }
   }
   
   // Multiple types - emit warning with details and select by size
-  LLVM_DEBUG(dbgs() << "  Warning: Multiple types (" << Types.size() 
-                    << ") for memset, selecting by size\n");
-  errs() << "Warning: memset has multiple candidate types (" << Types.size() 
+  LLVM_DEBUG(dbgs() << "  Warning: types cannot determined (" << Types.size() 
+                    << ") for memcpy/memset, selecting by size\n");
+  errs() << "Warning: memcpy/memset has multiple candidate types or union types (" << Types.size()
          << ")" << LocStr << ":\n";
   for (MDNode *MD : Types) {
     errs() << "  - " << TR->getTypeString(MD) << "\n";
@@ -341,35 +368,9 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
   for (MDNode *MD : *DestTypes) {
     errs() << "  - " << TR->getTypeString(MD) << "\n";
   }
-  errs() << "  Selecting best match by size...\n";
-  
-  Type *BestType = nullptr;
-  
-  for (MDNode *PointeeMD : Types) {
-    if (!PointeeMD)
-      continue;
-    Type *Ty = TR->getLLVMTypeFromMD(PointeeMD);
-    if (!Ty)
-      continue;
-    
-    uint64_t TySize = DL->getTypeAllocSize(Ty);
-    // Check if Size is a multiple of TySize
-    if (Size == maxUIntN(uint64_t(64))) {
-      // Unknown size - prefer larger types
-      if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
-        BestType = Ty;
-      }
-      continue;
-    } else if (Size % TySize == 0) {
-      if (!BestType || TySize > DL->getTypeAllocSize(BestType)) {
-        BestType = Ty;
-      }
-      continue;
-    }
-  }
   
   if (BestType) {
-    LLVM_DEBUG(dbgs() << "  Selected type for memset: " << *BestType << "\n");
+    errs() << "  Selected type for memset: " << *BestType << "\n";
   } else {
     errs() << "Warning: memset could not determine element type from candidates" 
            << LocStr << "\n";
