@@ -1093,7 +1093,6 @@ bool TypeRecovery::propagateBackward(Value *V) {
 bool TypeRecovery::backpropLoad(LoadInst *LI) {
   // %q = load ptr, ptr %p
   // If %q's type is known (T), then %p's type is ptr-to-T
-  return false;
   
   const TypeSet *ResultTypes = getTypeSet(LI);
   if (!ResultTypes || ResultTypes->empty())
@@ -1127,15 +1126,13 @@ bool TypeRecovery::backpropStore(StoreInst *SI) {
   }
   
   // Forward: val type -> dest type
-  while(0) {
-    const TypeSet *ValTypes = getTypeSet(Val);
-    if (ValTypes) {
-      for (MDNode *ValMD : *ValTypes) {
-        MDNode *DestMD = getOrCreatePtrToTypeMD(ValMD);
-        if (DestMD && addType(Dest, DestMD)) {
-          NextWorklist.insert(Dest);
-          Changed = true;
-        }
+  const TypeSet *ValTypes = getTypeSet(Val);
+  if (ValTypes) {
+    for (MDNode *ValMD : *ValTypes) {
+      MDNode *DestMD = getOrCreatePtrToTypeMD(ValMD);
+      if (DestMD && addType(Dest, DestMD)) {
+        NextWorklist.insert(Dest);
+        Changed = true;
       }
     }
   }
