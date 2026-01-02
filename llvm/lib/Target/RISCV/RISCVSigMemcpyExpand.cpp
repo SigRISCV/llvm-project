@@ -328,7 +328,7 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
     // Single type - use it
     MDNode *MD = *Types.begin();
     BestType = TR->getLLVMTypeFromMD(MD);
-    if (TR->isUnionTypeMD(MD)) {
+    if (!TR->isUnionTypeMD(MD)) {
       return BestType;
     }
   } else {
@@ -370,7 +370,7 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
   }
   
   if (BestType) {
-    errs() << "  Selected type for memset: " << *BestType << "\n";
+    errs() << "  Selected type for memset: " << TR->getLLVMTypeString(BestType) << "\n";
   } else {
     errs() << "Warning: memset could not determine element type from candidates" 
            << LocStr << "\n";
