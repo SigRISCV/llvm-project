@@ -686,6 +686,12 @@ bool TypeRecovery::addType(Value *V, MDNode *MD) {
   if (!MD)
     return false;
 
+  if (!V->getType()->isPointerTy())
+    return false;
+
+  if (!isPointerTypeMD(MD))
+    return false;
+
   if (dyn_cast<Constant>(V)) {
     return false;
   }
@@ -695,18 +701,13 @@ bool TypeRecovery::addType(Value *V, MDNode *MD) {
     return false;
   }
 
-  if (isStructTypeMD(MD) || isArrayTypeMD(MD)) {
+  if (!isPointerTypeMD(MD)) {
     return false;
-  }
-  if (V->getType()->isPointerTy()) {
-    if (!isPointerTypeMD(MD)) {
-      return false;
-    } else {
-      MDNode *PointeeMD = getPointeeTypeMD(MD);
-      if (PointeeMD && PointeeMD != lookupTypeByString("void*")) {
-        if (TSor->second.count(PointeeMD) > 0) {
-          return false;
-        }
+  } else {
+    MDNode *PointeeMD = getPointeeTypeMD(MD);
+    if (PointeeMD && PointeeMD != lookupTypeByString("void*")) {
+      if (TSor->second.count(PointeeMD) > 0) {
+        return false;
       }
     }
   }
@@ -725,6 +726,9 @@ bool TypeRecovery::addTypeInitStage(Value *V, MDNode *MD) {
 }
 
 bool TypeRecovery::unionTypes(Value *V, const TypeSet &Other) {
+  if (!V->getType()->isPointerTy())
+    return false;
+
   bool Changed = false;
   for (MDNode *MD : Other) {
     Changed |= addType(V, MD);
@@ -1156,7 +1160,6 @@ bool TypeRecovery::backpropCall(CallBase *CB) {
     // Format: !{ptr undef, !{ret_type, param_types...}} for func ptr
     // Or direct !{ret_type, param_types...} for func type
     MDNode *TypesMD = FuncMD;
-    DEBUG_FILE << getTypeString(TypesMD) << "\n";
     
     if (!TypesMD || TypesMD->getNumOperands() < 1)
       return false;
@@ -1181,7 +1184,6 @@ bool TypeRecovery::backpropCall(CallBase *CB) {
       unsigned MDIdx = I + 1;  // +1 to skip return type
       if (auto *ParamTypeMD = dyn_cast<MDNode>(TypesMD->getOperand(MDIdx))) {
         Value *Arg = CB->getArgOperand(I);
-        DEBUG_FILE << getTypeString(ParamTypeMD) << "\n";
         if (addType(Arg, ParamTypeMD)) {
           NextWorklist.insert(Arg);
           Changed = true;
