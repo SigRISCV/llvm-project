@@ -37,6 +37,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -119,7 +120,7 @@ private:
   // Returns nullptr if no suitable type found
   Type *selectMemsetType(Value* I, Value *Dest, uint64_t Size);
 
-  Type *selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size);
+  Type *selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size, StringRef FuncName);
 
   SmallPtrSet<MDNode *, 4> filterComplexTypes(
       const SmallPtrSet<MDNode *, 4> &Types);
@@ -382,12 +383,12 @@ SmallPtrSet<MDNode *, 4> RISCVSigMemcpyExpand::filterSubSetTypes(
   return ExtendSet;
 }
 
-Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size) {
+Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet* DestTypes, uint64_t Size, StringRef FuncName) {
   // Get source location for better diagnostics
   std::string SrcLoc = TypeRecovery::getSourceLocation(I);
   std::string LocStr = SrcLoc.empty() ? "" : " at " + SrcLoc;
 
-  LLVM_DEBUG(dbgs() << "Dest Types for memcpy/memset" << LocStr << ":\n");
+  LLVM_DEBUG(dbgs() << "Dest Types for " << FuncName << " " << LocStr << ":\n");
   for (MDNode *MD : *DestTypes) {
     LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
   }
@@ -399,8 +400,8 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
   Types = filterBareAndArrayPointeeTypes(Types);
   
   if (Types.empty()) {
-    LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memset\n");
-    errs() << "Warning: memset destination has only bare pointer type, no concrete type" 
+    LLVM_DEBUG(dbgs() << "  Memcpy Expand Warning: Only bare ptr types, no concrete type for " << FuncName << "\n");
+    errs() << "Memcpy Expand Warning: " << FuncName << " destination has only bare pointer type, no concrete type"
            << LocStr << "\n";
     return nullptr;
   }
@@ -424,7 +425,7 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
     }
   }
 
-  LLVM_DEBUG(dbgs() << "Candidate Types for memcpy/memset" << LocStr << ":\n");
+  LLVM_DEBUG(dbgs() << "Candidate Types for " << FuncName << " " << LocStr << ":\n");
   for (MDNode *MD : candidateTypes) {
     LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
   }
@@ -435,14 +436,14 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
     candidateTypes = NoSubSetTypes;
   }
 
-  LLVM_DEBUG(dbgs() << "NoSubSet Types for memcpy/memset" << LocStr << ":\n");
+  LLVM_DEBUG(dbgs() << "NoSubSet Types for " << FuncName << " " << LocStr << ":\n");
   for (MDNode *MD : NoSubSetTypes) {
     LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
   }
 
   SmallPtrSet<MDNode *, 4> SimpleTypes = filterComplexTypes(candidateTypes);
 
-  LLVM_DEBUG(dbgs() << "Simple Types for memcpy/memset" << LocStr << ":\n");
+  LLVM_DEBUG(dbgs() << "Simple Types for " << FuncName << " " << LocStr << ":\n");
   for (MDNode *MD : SimpleTypes) {
     LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
   }
@@ -471,9 +472,9 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
   
   // Multiple types - emit warning with details and select by size
   if (cannot_determined && BestType) {
-    LLVM_DEBUG(dbgs() << "  Warning: types cannot determined (" << Types.size() 
-                      << ") for memcpy/memset, selecting by size\n");
-    errs() << "Warning: memcpy/memset has multiple candidate types or union types (" << Types.size()
+    LLVM_DEBUG(dbgs() << "  Memcpy Expand Warning: types cannot determined (" << Types.size() 
+                      << ") for " << FuncName << ", selecting by size\n");
+    errs() << "Memcpy Expand Warning: " << FuncName << " has multiple candidate types or union types (" << Types.size()
           << ")" << LocStr << ":\n";
     for (MDNode *MD : SimpleTypes) {
       errs() << "  - " << TR->getTypeString(MD) << "\n";
@@ -486,12 +487,12 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
     if (BestType) {
       errs() << "  Selected type for memset: " << TR->getLLVMTypeString(BestType) << "\n";
     } else {
-      errs() << "Warning: memset could not determine element type from candidates" 
+      errs() << "Memcpy Expand Warning: memset could not determine element type from candidates" 
             << LocStr << "\n";
     }
   } else if (!BestType) {
-    LLVM_DEBUG(dbgs() << "  Warning: Only bare ptr types, no concrete type for memset\n");
-    errs() << "Warning: memset destination has only bare pointer type, no concrete type" 
+    LLVM_DEBUG(dbgs() << "  Memcpy Expand Warning: Only bare ptr types, no concrete type for " << FuncName << "\n");
+    errs() << "Memcpy Expand Warning: " << FuncName << " destination has only bare pointer type, no concrete type" 
            << LocStr << "\n";
   }
   
@@ -499,7 +500,7 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
 }
 
 Type* RISCVSigMemcpyExpand::selectMemsetType(Value* I, Value *Dest, uint64_t Size) {
-  return selectUsedType(I, TR->getTypeSet(Dest), Size);
+  return selectUsedType(I, TR->getTypeSet(Dest), Size, "memset");
 }
 
 Type *RISCVSigMemcpyExpand::selectMemcpyType(Value* I, Value *Dest, Value *Src, 
@@ -520,7 +521,7 @@ Type *RISCVSigMemcpyExpand::selectMemcpyType(Value* I, Value *Dest, Value *Src,
       MergedTypes.insert(MD);
   }
 
-  return selectUsedType(I, &MergedTypes, Size);
+  return selectUsedType(I, &MergedTypes, Size, "memcpy");
 }
 
 //===----------------------------------------------------------------------===//
