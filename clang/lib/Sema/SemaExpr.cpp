@@ -9051,7 +9051,8 @@ static AssignConvertType checkPointerTypesForAssignment(Sema &S,
     rhq.removeObjCLifetime();
   }
 
-  if (S.getASTContext().getTargetInfo().isSigModeSupported()) {
+  ASTContext& Context = S.getASTContext();
+  if (Context.getTargetInfo().isSigModeSupported()) {
     if (!lhptee->isContainPointer()) {
       lhq.addRaw();
     }
@@ -9062,6 +9063,12 @@ static AssignConvertType checkPointerTypesForAssignment(Sema &S,
 
     if (rhq.hasRaw() && !lhq.hasRaw()) {
       // Assigning from a raw pointer to a qualified pointer is not allowed.
+      return AssignConvertType::Incompatible;
+    }
+
+    if (!rhq.hasRaw() && lhq.hasRaw() && !lhptee->isVoidType()) {
+      // Assigning from a qualified pointer to a raw pointer is not allowed,
+      // except when the pointee type is void.
       return AssignConvertType::Incompatible;
     }
   }
