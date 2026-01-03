@@ -12682,8 +12682,13 @@ void Sema::CheckMain(FunctionDecl *FD, const DeclSpec &DS) {
   // FIXME: a lot of the following diagnostics would be improved
   // if we had some location information about types.
 
+  bool isSigMode = getASTContext().getTargetInfo().isSigModeSupported();
+
   QualType CharPP =
     Context.getPointerType(Context.getPointerType(Context.CharTy));
+  if (isSigMode) {
+    CharPP = CharPP.getRawChainType(getASTContext());
+  }
   QualType Expected[] = { Context.IntTy, CharPP, CharPP, CharPP };
 
   for (unsigned i = 0; i < nparams; ++i) {
@@ -12701,11 +12706,15 @@ void Sema::CheckMain(FunctionDecl *FD, const DeclSpec &DS) {
 
       QualifierCollector qs;
       const PointerType* PT;
-      if ((PT = qs.strip(AT)->getAs<PointerType>()) &&
+      if ((PT = qs.strip(AT)->getAs<PointerType>()) && 
+          (!isSigMode || PT->getPointeeType().isRawQualified()) &&
           (PT = qs.strip(PT->getPointeeType())->getAs<PointerType>()) &&
           Context.hasSameType(QualType(qs.strip(PT->getPointeeType()), 0),
                               Context.CharTy)) {
         qs.removeConst();
+        if (isSigMode) {
+          qs.removeRaw();
+        }
         mismatch = !qs.empty();
       }
     }
