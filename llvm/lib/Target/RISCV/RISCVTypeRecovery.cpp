@@ -422,6 +422,7 @@ void TypeRecovery::getFieldMDNodeFromOffset(MDNode* MD, uint64_t Offset, TypeSet
   if (Ty->isStructTy()) {
     StructType* ST = dyn_cast<StructType>(Ty);
     const DataLayout& DL = Mod.getDataLayout();
+    uint64_t last_field_end = 0;
     for (unsigned i = 0; i < ST->getNumElements(); ++i) {
       Type* FieldTy = ST->getElementType(i);
       uint64_t FieldOffset = DL.getStructLayout(ST)->getElementOffset(i);
@@ -430,7 +431,15 @@ void TypeRecovery::getFieldMDNodeFromOffset(MDNode* MD, uint64_t Offset, TypeSet
         if (FieldMD) {
           getFieldMDNodeFromOffset(FieldMD, Offset - FieldOffset, typeset);
         }
+      } else if (Offset >= last_field_end && Offset < FieldOffset) {
+        // Padding between last field and this field
+        MDNode* Int8MD = lookupTypeByString("i8");
+        MDNode* PaddingMD = getOrCreateArrayOfTypeMD(Int8MD, FieldOffset - last_field_end);
+        if (PaddingMD) {
+          typeset.insert(PaddingMD);
+        }
       }
+      last_field_end = FieldOffset + DL.getTypeAllocSize(FieldTy);
     }
   } else if (Ty->isArrayTy()) {
     ArrayType* AT = dyn_cast<ArrayType>(Ty);
