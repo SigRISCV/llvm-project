@@ -359,6 +359,8 @@ public:
     return const_cast<Type *>(this);
   }
 
+  Type *getRawType(LLVMContext &Ctx);
+
   //===--------------------------------------------------------------------===//
   // Type Iteration support.
   //

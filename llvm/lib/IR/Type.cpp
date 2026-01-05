@@ -246,6 +246,29 @@ int Type::getFPMantissaWidth() const {
   return -1;
 }
 
+Type *Type::getRawType(LLVMContext &Ctx) {
+  if (auto *PtrTy = dyn_cast<PointerType>(this)) {
+    // Convert ptr to ptr addrspace(100)
+    if (PtrTy->getAddressSpace() == 0) {
+      return PointerType::get(Ctx, 100);
+    }
+  } else if (auto *FuncTy = dyn_cast<FunctionType>(this)) {
+    if (!FuncTy->getRaw()) {
+      // Recursively convert function type parameters and return type
+      Type *RetTy = FuncTy->getReturnType()->getRawType(Ctx);
+      SmallVector<Type *, 8> Params;
+      
+      for (Type *ParamTy : FuncTy->params()) {
+        Type *NewParamTy = ParamTy->getRawType(Ctx);
+        Params.push_back(NewParamTy);
+      }
+      
+      return FunctionType::get(RetTy, Params, FuncTy->isVarArg(), true);
+    }
+  }
+  return this;
+}
+
 bool Type::isFirstClassType() const {
   switch (getTypeID()) {
     default:

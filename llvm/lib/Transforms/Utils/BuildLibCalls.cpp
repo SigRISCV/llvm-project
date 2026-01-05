@@ -24,6 +24,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/TypeSize.h"
 #include <optional>
 
@@ -1458,7 +1459,15 @@ FunctionCallee llvm::getOrInsertLibFunc(Module *M, const TargetLibraryInfo &TLI,
   assert(TLI.has(TheLibFunc) &&
          "Creating call to non-existing library function.");
   StringRef Name = TLI.getName(TheLibFunc);
-  FunctionCallee C = M->getOrInsertFunction(Name, T, AttributeList);
+  
+  // Convert function type to use addrspace(100) for all pointers
+  // and mark it as a raw function
+  LLVMContext &Ctx = M->getContext();
+  Type* RawType = T->getRawType(Ctx);
+  FunctionType *RawFuncTy = dyn_cast<FunctionType>(RawType);
+  assert(RawFuncTy && "Expected function type.");
+  
+  FunctionCallee C = M->getOrInsertFunction(Name, RawFuncTy, AttributeList);
 
   // Make sure any mandatory argument attributes are added.
 
@@ -1470,7 +1479,12 @@ FunctionCallee llvm::getOrInsertLibFunc(Module *M, const TargetLibraryInfo &TLI,
   // zero extensions as needed.  F is retreived with cast<> because we demand
   // of the caller to have called isLibFuncEmittable() first.
   Function *F = cast<Function>(C.getCallee());
-  assert(F->getFunctionType() == T && "Function type does not match.");
+  assert(F->getFunctionType() == RawFuncTy && "Function type does not match.");
+  
+  // Mark the function as raw
+  FunctionType *FTy = F->getFunctionType();
+  const_cast<FunctionType *>(FTy)->setRaw(true);
+  
   switch (TheLibFunc) {
   case LibFunc_fputc:
   case LibFunc_putchar:
@@ -1513,8 +1527,8 @@ FunctionCallee llvm::getOrInsertLibFunc(Module *M, const TargetLibraryInfo &TLI,
 
   default:
 #ifndef NDEBUG
-    for (unsigned i = 0; i < T->getNumParams(); i++)
-      assert(!isa<IntegerType>(T->getParamType(i)) &&
+    for (unsigned I = 0; I < RawFuncTy->getNumParams(); I++)
+      assert(!isa<IntegerType>(RawFuncTy->getParamType(I)) &&
              "Unhandled integer argument.");
 #endif
     break;
