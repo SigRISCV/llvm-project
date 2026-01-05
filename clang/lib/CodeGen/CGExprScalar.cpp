@@ -2502,8 +2502,8 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       if(SrcTy->isPtrOrPtrVectorTy() && DstTy->isPtrOrPtrVectorTy() &&
         SrcTy->getPointerAddressSpace() != DstTy->getPointerAddressSpace() &&
         (SrcTy->getPointerAddressSpace() == raw_addrspace || DstTy->getPointerAddressSpace() == raw_addrspace)){
-        QualType pointee = cast<PointerType>(DestTy)->getPointeeType();
-        const Type* pointee_type = pointee.getTypePtr();
+        // QualType pointee = cast<PointerType>(DestTy.getTypePtr())->getPointeeType();
+        // const Type* pointee_type = pointee.getTypePtr();
         // if (pointee_type->isContainPointer()) {
         //   CGF.CGM.getDiags().Report(CE->getBeginLoc(), diag::err_cast_with_attr_without_pointer) << pointee.getAsString();
         // }
