@@ -1680,8 +1680,11 @@ bool QualType::UseExcessPrecision(const ASTContext &Ctx) {
 QualType QualType::getRawChainType(const ASTContext &Ctx) {
   const Type* type = getTypePtr();
   QualType ret = *this;
-  if (type->isPointerType()) {
-    const PointerType* pointer = type->getAs<PointerType>();
+  if (const ParenType* paren = type->getAs<ParenType>()) {
+    QualType inner = paren->getInnerType();
+    inner = inner.getRawChainType(Ctx);
+    ret = Ctx.getParenType(inner);
+  } else if (const PointerType* pointer = type->getAs<PointerType>()) {
     QualType pointee = pointer->getPointeeType();
     if (!pointee.isRawQualified()) {
       if (pointee->isFunctionType()) {
@@ -1692,8 +1695,7 @@ QualType QualType::getRawChainType(const ASTContext &Ctx) {
       ret = Ctx.getPointerType(pointee);
       ret = Ctx.getQualifiedType(ret, this->getQualifiers());
     }
-  } else if (type->isFunctionType()) {
-    const FunctionProtoType* function = type->getAs<FunctionProtoType>();
+  } else if (const FunctionProtoType* function = type->getAs<FunctionProtoType>()) {
     QualType rettype = Ctx.getRawQual(function->getReturnType());
     SmallVector<QualType, 16> ParamTys;
     for (QualType qual:function->getParamTypes()) {
