@@ -1726,12 +1726,17 @@ QualType QualType::getNoRawChainType(const ASTContext &Ctx) {
       QualType rettype = Ctx.getNoRawQual(function->getReturnType());
       SmallVector<QualType, 16> ParamTys;
       for (QualType qual:function->getParamTypes()) {
-        qual = qual.getNoRawChainType(Ctx);
+        qual = Ctx.getNoRawQual(qual);
         ParamTys.push_back(qual);
       }
       FunctionProtoType::ExtProtoInfo EPI = function->getExtProtoInfo();
       EPI.ExtInfo = EPI.ExtInfo.withIsRaw(false);
       ret = Ctx.getFunctionType(rettype, ParamTys, EPI);
+    } else if (const FunctionNoProtoType* function = type->getAs<FunctionNoProtoType>()) {
+      QualType rettype = Ctx.getNoRawQual(function->getReturnType());
+      FunctionProtoType::ExtInfo EPI;
+      EPI = function->getExtInfo().withIsRaw(false);
+      ret = Ctx.getFunctionNoProtoType(rettype, EPI);
     }
   } else if (type->isArrayType()) {
     const ArrayType* array = type->getAsArrayTypeUnsafe();
