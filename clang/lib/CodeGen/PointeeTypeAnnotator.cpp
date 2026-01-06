@@ -156,6 +156,9 @@ llvm::MDNode *PointeeTypeAnnotator::createBasicTypeMD(llvm::Type *LLVMTy) {
 }
 
 QualType PointeeTypeAnnotator::getQualTypeFromLLVMType(llvm::Type *LLVMTy) {
+  if (LLVMTy->isPointerTy()) {
+    LLVMTy = llvm::PointerType::get(CGM.getLLVMContext(), 0);
+  }
   QualType Result;
   if (auto AT = dyn_cast<llvm::ArrayType>(LLVMTy)) {
     llvm::Type* ElementTy = AT->getElementType();
@@ -533,6 +536,7 @@ void PointeeTypeAnnotator::annotateFunctionArg(llvm::SmallVector<llvm::Metadata 
 void PointeeTypeAnnotator::annotateFunction(llvm::Function *F, QualType FuncTy, 
   const CGFunctionInfo &FI) {
 
+  FuncTy = CGM.getContext().getNoRawQual(FuncTy);
   FuncTy = FuncTy.getCanonicalType();
   // Check cache first
   const void *Key = getTypeCacheKey(FuncTy);
