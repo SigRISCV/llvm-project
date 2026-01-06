@@ -652,9 +652,11 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     } else if (!STI.isSigModeSupport()) {
       Opcode = RISCV::SD;
     } else if (Flags & MachineInstr::FrameSetup_EncMap) {
-      Opcode = RISCV::SS_ID;
+      // Opcode = RISCV::SS_ID;
+      Opcode = RISCV::SD;
     } else {
-      Opcode = RISCV::SS;
+      // Opcode = RISCV::SS;
+      Opcode = RISCV::SD;
     }
   } else if (RISCV::GPRF16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::SH_INX;
@@ -748,9 +750,11 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     } else if (!STI.isSigModeSupport()) {
       Opcode = RISCV::LD;
     } else if (Flags & MachineInstr::FrameDestroy_EncMap) {
-      Opcode = RISCV::LS_MAP;
+      // Opcode = RISCV::LS_MAP;
+      Opcode = RISCV::LD;
     } else {
-      Opcode = RISCV::LS;
+      // Opcode = RISCV::LS;
+      Opcode = RISCV::LD;
     }
   } else if (RISCV::GPRF16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::LH_INX;

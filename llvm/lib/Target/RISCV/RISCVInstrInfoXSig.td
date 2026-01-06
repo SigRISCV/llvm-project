@@ -104,21 +104,34 @@ def PseudoLSGA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                        "lsga", "$dst, $src">;
 
 // Define Pat
-def : Pat<(xsig_setnewid GPR:$rs1), (SETNEWID GPR:$rs1, 0)>;
-def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (SETNEWID GPR:$rs1, simm12_lo:$imm12)>;
-def : Pat<(xsig_setdummyid GPR:$rs1), (SETDUMMYID GPR:$rs1, 0)>;
-def : Pat<(xsig_setdummyid (add GPR:$rs1, simm12_lo:$imm12)), (SETDUMMYID GPR:$rs1, simm12_lo:$imm12)>;
-def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
-def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
-def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
-def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
-def : LdPat<sigload, LS, i64>;
-def : StPat<sigstore, SS, GPR, i64>;
-def : LdPat<dynsigload, LS_MAP, i64>;
-def : StPat<dynsigstore, SS_ID, GPR, i64>;
+// def : Pat<(xsig_setnewid GPR:$rs1), (SETNEWID GPR:$rs1, 0)>;
+// def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (SETNEWID GPR:$rs1, simm12_lo:$imm12)>;
+// def : Pat<(xsig_setdummyid GPR:$rs1), (SETDUMMYID GPR:$rs1, 0)>;
+// def : Pat<(xsig_setdummyid (add GPR:$rs1, simm12_lo:$imm12)), (SETDUMMYID GPR:$rs1, simm12_lo:$imm12)>;
+// def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
+// def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
+// def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
+// def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
+// def : LdPat<sigload, LS, i64>;
+// def : StPat<sigstore, SS, GPR, i64>;
+// def : LdPat<dynsigload, LS_MAP, i64>;
+// def : StPat<dynsigstore, SS_ID, GPR, i64>;
 def : Pat<(xsig_debug_sig), (DEBUG (XLenVT X0), 0)>;
 def : Pat<(xsig_debug_chr GPR:$rs1), (DEBUG GPR:$rs1, 1)>;
 def : Pat<(xsig_debug_int GPR:$rs1), (DEBUG GPR:$rs1, 2)>;
 def : Pat<(xsig_debug_ptr GPR:$rs1), (DEBUG GPR:$rs1, 3)>;
 def : Pat<(xsig_debug_csr GPR:$rs1), (DEBUG GPR:$rs1, 4)>;
+
+def : Pat<(xsig_setnewid GPR:$rs1), (ADDI GPR:$rs1, 0)>;
+def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (ADDI GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(xsig_setdummyid GPR:$rs1), (ADDI GPR:$rs1, 0)>;
+def : Pat<(xsig_setdummyid (add GPR:$rs1, simm12_lo:$imm12)), (ADDI GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(xsig_setrawid GPR:$rs1), (ADDI GPR:$rs1, 0)>;
+def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (ADDI GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoCALL tglobaladdr:$func)>;
+def : Pat<(riscv_rcall texternalsym:$func), (PseudoCALL texternalsym:$func)>;
+def : LdPat<sigload, LD, i64>;
+def : StPat<sigstore, SD, GPR, i64>;
+def : LdPat<dynsigload, LD, i64>;
+def : StPat<dynsigstore, SD, GPR, i64>;
 }

@@ -9125,7 +9125,8 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
     // which expands to (ld (addi (auipc %got_pcrel_hi(sym)) %pcrel_lo(auipc))).
     unsigned int opcode = RISCV::PseudoLGA;
     if (Subtarget.isSigModeSupport()) {
-      opcode = RISCV::PseudoLSGA;
+      // opcode = RISCV::PseudoLSGA;
+      opcode = RISCV::PseudoLGA;
     } 
     SDValue Load =
         SDValue(DAG.getMachineNode(opcode, DL, Ty, Addr), 0);
@@ -9167,7 +9168,8 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
       // (ld (addi (auipc %got_pcrel_hi(sym)) %pcrel_lo(auipc))).
       unsigned int opcode = RISCV::PseudoLGA;
       if (Subtarget.isSigModeSupport()) {
-        opcode = RISCV::PseudoLSGA;
+        // opcode = RISCV::PseudoLSGA;
+        opcode = RISCV::PseudoLGA;
       } 
       SDValue Load =
           SDValue(DAG.getMachineNode(opcode, DL, Ty, Addr), 0);
