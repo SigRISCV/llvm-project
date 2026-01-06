@@ -8450,8 +8450,13 @@ inline LangAS QualType::getAddressSpace() const {
 
 inline LangAS QualType::getAddressSpaceUnderSigMode() const {
   LangAS as = getAddressSpace();
-  if (!hasAddressSpace() && isRawQualified()){
-    as = LangAS::sigmode_raw;
+  if (!hasAddressSpace()){
+    if (isRawQualified())
+      as = LangAS::sigmode_raw;
+    else if (auto FT = getTypePtr()->getAs<FunctionType>()) {
+      if (FT->getReturnType().isRawQualified())
+        as = LangAS::sigmode_raw;
+    }
   }
   return as;
 }
