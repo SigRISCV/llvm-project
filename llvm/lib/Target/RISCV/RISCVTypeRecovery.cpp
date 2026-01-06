@@ -29,6 +29,24 @@ using namespace llvm;
 //===----------------------------------------------------------------------===//
 // Type String Generation
 //===----------------------------------------------------------------------===//
+static std::string debugMD(MDNode* MD) {
+  std::string Result;
+  raw_string_ostream OS(Result);
+  OS << "{";
+  for (unsigned i = 0; i < MD->getNumOperands(); ++i) {
+    if (i > 0) OS << ", ";
+    if (auto *SubMD = dyn_cast<MDNode>(MD->getOperand(i))) {
+      OS << debugMD(SubMD);
+    } else if (auto *MDC = dyn_cast<ConstantAsMetadata>(MD->getOperand(i))) {
+      MDC->getValue()->print(OS);
+    } else {
+      MD->getOperand(i)->print(OS);
+    }
+  }
+  OS << "}";
+  return OS.str();
+}
+
 
 std::string TypeRecovery::getTypeString(MDNode *MD) {
   if (!MD || MD->getNumOperands() < 1)
