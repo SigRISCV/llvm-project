@@ -618,7 +618,6 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     QualType ETy = PTy->getPointeeType();
     unsigned AS = 0;
     AS = getTargetAddressSpace(ETy);
-    // llvm::dbgs() << "AS of type " << ETy.getAsString() << " in normal is " << AS <<"\n";
     ResultType = llvm::PointerType::get(getLLVMContext(), AS);
     break;
   }
@@ -903,7 +902,8 @@ unsigned CodeGenTypes::getTargetAddressSpace(QualType T) const {
   if (Target.isSigModeSupported()) {
     AS = T.getAddressSpaceUnderSigMode();
   }
-  unsigned addr = T->isFunctionType() && !T.hasAddressSpace()
+  unsigned addr = T->isFunctionType() && !T.hasAddressSpace() && 
+              !T->getAs<FunctionType>()->getReturnType().isRawQualified()
              ? getDataLayout().getProgramAddressSpace()
              : getContext().getTargetAddressSpace(AS);
   // assert(addr != 100);
