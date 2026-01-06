@@ -11,7 +11,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -24,8 +26,10 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/TypeSize.h"
+#include <cassert>
 #include <optional>
 
 using namespace llvm;
@@ -1453,6 +1457,14 @@ void llvm::markRegisterParameterAttributes(Function *F) {
   }
 }
 
+static bool isSigModeABIName(StringRef ABI) {
+  return llvm::StringSwitch<bool>(ABI)
+      .Case("lps64", true)
+      .Case("lps64f", true)
+      .Case("lps64d", true)
+      .Default(false);
+}
+
 FunctionCallee llvm::getOrInsertLibFunc(Module *M, const TargetLibraryInfo &TLI,
                                         LibFunc TheLibFunc, FunctionType *T,
                                         AttributeList AttributeList) {
@@ -1462,12 +1474,14 @@ FunctionCallee llvm::getOrInsertLibFunc(Module *M, const TargetLibraryInfo &TLI,
   
   // Convert function type to use addrspace(100) for all pointers
   // and mark it as a raw function
-  LLVMContext &Ctx = M->getContext();
-  Type* RawType = T->getRawType(Ctx);
-  FunctionType *RawFuncTy = dyn_cast<FunctionType>(RawType);
-  assert(RawFuncTy && "Expected function type.");
-  
-  FunctionCallee C = M->getOrInsertFunction(Name, RawFuncTy, AttributeList);
+  if(isSigModeABIName(M->getTargetABIFromMD())) {
+    LLVMContext &Ctx = M->getContext();
+    Type* RawType = T->getRawType(Ctx);
+    T = dyn_cast<FunctionType>(RawType);
+  }
+  assert(T && "Expected function type.");
+
+  FunctionCallee C = M->getOrInsertFunction(Name, T, AttributeList);
 
   // Make sure any mandatory argument attributes are added.
 
@@ -1479,11 +1493,7 @@ FunctionCallee llvm::getOrInsertLibFunc(Module *M, const TargetLibraryInfo &TLI,
   // zero extensions as needed.  F is retreived with cast<> because we demand
   // of the caller to have called isLibFuncEmittable() first.
   Function *F = cast<Function>(C.getCallee());
-  assert(F->getFunctionType() == RawFuncTy && "Function type does not match.");
-  
-  // Mark the function as raw
-  FunctionType *FTy = F->getFunctionType();
-  const_cast<FunctionType *>(FTy)->setRaw(true);
+  assert(F->getFunctionType() == T && "Function type does not match.");
   
   switch (TheLibFunc) {
   case LibFunc_fputc:
@@ -1527,8 +1537,8 @@ FunctionCallee llvm::getOrInsertLibFunc(Module *M, const TargetLibraryInfo &TLI,
 
   default:
 #ifndef NDEBUG
-    for (unsigned I = 0; I < RawFuncTy->getNumParams(); I++)
-      assert(!isa<IntegerType>(RawFuncTy->getParamType(I)) &&
+    for (unsigned I = 0; I < T->getNumParams(); I++)
+      assert(!isa<IntegerType>(T->getParamType(I)) &&
              "Unhandled integer argument.");
 #endif
     break;
