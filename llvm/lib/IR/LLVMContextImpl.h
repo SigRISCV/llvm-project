@@ -142,12 +142,13 @@ struct FunctionTypeKeyInfo {
     const Type *ReturnType;
     ArrayRef<Type *> Params;
     bool isVarArg;
+    bool isRaw;
 
-    KeyTy(const Type *R, const ArrayRef<Type *> &P, bool V)
-        : ReturnType(R), Params(P), isVarArg(V) {}
+    KeyTy(const Type *R, const ArrayRef<Type *> &P, bool V, bool Raw = false)
+        : ReturnType(R), Params(P), isVarArg(V), isRaw(Raw) {}
     KeyTy(const FunctionType *FT)
         : ReturnType(FT->getReturnType()), Params(FT->params()),
-          isVarArg(FT->isVarArg()) {}
+          isVarArg(FT->isVarArg()), isRaw(FT->getRaw()) {}
 
     bool operator==(const KeyTy &that) const {
       if (ReturnType != that.ReturnType)
@@ -155,6 +156,8 @@ struct FunctionTypeKeyInfo {
       if (isVarArg != that.isVarArg)
         return false;
       if (Params != that.Params)
+        return false;
+      if (isRaw != that.isRaw)
         return false;
       return true;
     }
@@ -171,7 +174,7 @@ struct FunctionTypeKeyInfo {
 
   static unsigned getHashValue(const KeyTy &Key) {
     return hash_combine(Key.ReturnType, hash_combine_range(Key.Params),
-                        Key.isVarArg);
+                        Key.isVarArg, Key.isRaw);
   }
 
   static unsigned getHashValue(const FunctionType *FT) {
@@ -1760,7 +1763,6 @@ public:
 
   using FunctionTypeSet = DenseSet<FunctionType *, FunctionTypeKeyInfo>;
   FunctionTypeSet FunctionTypes;
-  FunctionTypeSet RawFunctionTypes;
   using StructTypeSet = DenseSet<StructType *, AnonStructTypeKeyInfo>;
   StructTypeSet AnonStructTypes;
   StringMap<StructType *> NamedStructTypes;
