@@ -113,6 +113,29 @@ IRBuilderBase::createCallHelper(Function *Callee, ArrayRef<Value *> Ops,
   return CI;
 }
 
+bool 
+IRBuilderBase::RawCallArgCovert(FunctionType* FTy, ArrayRef<Value *> Args, 
+                                SmallVector<Value*, 4>& RawArgs) {
+
+  if (!FTy->getRaw()) {
+    return false;
+  }
+
+  bool changed = false;
+  Type *RawPtrType = PointerType::get(Context, 100);
+  for (Value *Arg : Args) {
+    if (PointerType *OpType = dyn_cast<PointerType>(Arg->getType())) {
+      if (OpType->getAddressSpace() != 100) {
+        Arg = CreateAddrSpaceCast(Arg, RawPtrType);
+        changed = true;
+      }
+    }
+    RawArgs.push_back(Arg);
+  }
+
+  return changed;
+}
+
 static Value *CreateVScaleMultiple(IRBuilderBase &B, Type *Ty, uint64_t Scale) {
   Value *VScale = B.CreateVScale(Ty);
   if (Scale == 1)

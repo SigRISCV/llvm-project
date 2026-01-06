@@ -17,6 +17,7 @@
 #include "llvm-c/Types.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/BasicBlock.h"
@@ -2507,10 +2508,15 @@ private:
                              const Twine &Name = "", FMFSource FMFSource = {},
                              ArrayRef<OperandBundleDef> OpBundles = {});
 
+  bool RawCallArgCovert(FunctionType* FTy, ArrayRef<Value *> Args, SmallVector<Value*, 4>& RawArgs);
+
 public:
   CallInst *CreateCall(FunctionType *FTy, Value *Callee,
                        ArrayRef<Value *> Args = {}, const Twine &Name = "",
                        MDNode *FPMathTag = nullptr) {
+    SmallVector<Value *, 4> RawArgs;
+    if (RawCallArgCovert(FTy, Args, RawArgs))
+      Args = RawArgs;
     CallInst *CI = CallInst::Create(FTy, Callee, Args, DefaultOperandBundles);
     if (IsFPConstrained)
       setConstrainedFPCallAttr(CI);
@@ -2522,6 +2528,9 @@ public:
   CallInst *CreateCall(FunctionType *FTy, Value *Callee, ArrayRef<Value *> Args,
                        ArrayRef<OperandBundleDef> OpBundles,
                        const Twine &Name = "", MDNode *FPMathTag = nullptr) {
+    SmallVector<Value *, 4> RawArgs;
+    if (RawCallArgCovert(FTy, Args, RawArgs))
+      Args = RawArgs;
     CallInst *CI = CallInst::Create(FTy, Callee, Args, OpBundles);
     if (IsFPConstrained)
       setConstrainedFPCallAttr(CI);
