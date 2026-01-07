@@ -122,11 +122,11 @@ def : Pat<(xsig_debug_int GPR:$rs1), (DEBUG GPR:$rs1, 2)>;
 def : Pat<(xsig_debug_ptr GPR:$rs1), (DEBUG GPR:$rs1, 3)>;
 def : Pat<(xsig_debug_csr GPR:$rs1), (DEBUG GPR:$rs1, 4)>;
 
-def : Pat<(xsig_setnewid GPR:$rs1), (ADDI GPR:$rs1, 0)>;
+def : Pat<(xsig_setnewid GPR:$rs1), (ADD GPR:$rs1, (XLenVT X0))>;
 def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (ADDI GPR:$rs1, simm12_lo:$imm12)>;
-def : Pat<(xsig_setdummyid GPR:$rs1), (ADDI GPR:$rs1, 0)>;
+def : Pat<(xsig_setdummyid GPR:$rs1), (ADD GPR:$rs1, (XLenVT X0))>;
 def : Pat<(xsig_setdummyid (add GPR:$rs1, simm12_lo:$imm12)), (ADDI GPR:$rs1, simm12_lo:$imm12)>;
-def : Pat<(xsig_setrawid GPR:$rs1), (ADDI GPR:$rs1, 0)>;
+def : Pat<(xsig_setrawid GPR:$rs1), (ADD GPR:$rs1, (XLenVT X0))>;
 def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (ADDI GPR:$rs1, simm12_lo:$imm12)>;
 def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoCALL tglobaladdr:$func)>;
 def : Pat<(riscv_rcall texternalsym:$func), (PseudoCALL texternalsym:$func)>;
