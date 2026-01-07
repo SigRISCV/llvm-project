@@ -194,7 +194,7 @@ private:
   //===--------------------------------------------------------------------===//
 
   // Threshold for inline expansion vs helper function call
-  static constexpr uint64_t InlineThreshold = 200;
+  static constexpr uint64_t InlineThreshold = 256;
 
   // Get all pointer offsets within a type (recursively handles arrays/structs)
   SmallVector<uint64_t, 8> getPointerOffsets(Type *Ty);
@@ -703,7 +703,6 @@ void RISCVSigMemcpyExpand::generateMemcpyFuncBody(Function *F, Type *ElemTy,
   Value *Len = &*ArgIt2;
   
   uint64_t ElemSize = DL->getTypeAllocSize(ElemTy);
-  Type *I8Ty = Type::getInt8Ty(*Ctx);
   Type *I64Ty = Type::getInt64Ty(*Ctx);
   
   BasicBlock *EntryBB = BasicBlock::Create(*Ctx, "entry", F);
@@ -832,8 +831,8 @@ void RISCVSigMemcpyExpand::generateMemcpyFuncBody(Function *F, Type *ElemTy,
           // Small field: accumulate into batch
           if (BatchBytes == 0) {
             BatchStartOffset = FieldOffset;
-            BatchDestStart = Builder.CreatePointerCast(DestField, PointerType::get(I8Ty, DestAS));
-            BatchSrcStart = Builder.CreatePointerCast(SrcField, PointerType::get(I8Ty, SrcAS));
+            BatchDestStart = DestField;
+            BatchSrcStart = SrcField;
           }
           
           // Add pointer offsets for this field (relative to batch start)
@@ -973,10 +972,8 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
   Value *LenVal = II->getArgOperand(2);
   
   // Get address spaces
-  if (II->getCalledFunction()->getName() == "memcpy") {
-    Dest = getRealPtr(Dest);
-    Src = getRealPtr(Src);
-  }
+  Dest = getRealPtr(Dest);
+  Src = getRealPtr(Src);
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
   unsigned SrcAS = Src->getType()->getPointerAddressSpace();
 
@@ -1231,7 +1228,7 @@ void RISCVSigMemcpyExpand::generateMemsetFuncBody(Function *F, Type *ElemTy,
           // Small field: accumulate
           if (BatchBytes == 0) {
             BatchStartOffset = FieldOffset;
-            BatchDestStart = Builder.CreatePointerCast(DestField, PointerType::get(I8Ty, DestAS));
+            BatchDestStart = DestField;
           }
           
           SmallVector<uint64_t, 8> FieldPtrOffsets = getPointerOffsets(FieldTy);
@@ -1357,9 +1354,7 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
   Value *LenVal = II->getArgOperand(2);
   
   // Get address space
-  if (II->getCalledFunction()->getName() == "memset") {
-    Dest = getRealPtr(Dest);
-  }
+  Dest = getRealPtr(Dest);
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
 
   LLVM_DEBUG(dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n");
@@ -1387,7 +1382,7 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
   if (IsRawToRaw || !HasPointers) {
     LLVM_DEBUG(dbgs() << "  Using llvm.memset (raw=" << IsRawToRaw
                       << ", has_pointers=" << HasPointers << ")\n");
-    emitMemsetCall(Builder, Dest, LenVal, DestAS);
+    return false;
   } else {
     // Calculate number of elements
     uint64_t ElemSize = DL->getTypeAllocSize(ElemTy);
@@ -1538,7 +1533,7 @@ ModulePass *llvm::createRISCVSigMemcpyExpandPass() {
 // Inline Expansion for Small Copies
 //===----------------------------------------------------------------------===//
 
-SmallVector<uint64_t, 8> RISCVSigMemcpyExpand::getPointerOffsets(Type *Ty base) {
+SmallVector<uint64_t, 8> RISCVSigMemcpyExpand::getPointerOffsets(Type *Ty) {
   SmallVector<uint64_t, 8> Offsets;
   
   if (Ty->isPointerTy()) {
@@ -1695,7 +1690,6 @@ void RISCVSigMemcpyExpand::generateBlockZeroByOffset(
   Type *I16Ty = Builder.getInt16Ty();
   Type *I32Ty = Builder.getInt32Ty();
   Type *I64Ty = Builder.getInt64Ty();
-  Type *DestPtrTy = PointerType::get(*Ctx, DestAS);
   
   // Cast dest to i8* for byte-level GEP
   Value *DestI8 = Builder.CreatePointerCast(Dest, PointerType::get(*Ctx, DestAS));
