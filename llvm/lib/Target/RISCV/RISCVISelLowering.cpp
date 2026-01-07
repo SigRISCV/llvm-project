@@ -9102,19 +9102,49 @@ static SDValue getLargeExternalSymbol(ExternalSymbolSDNode *N, const SDLoc &DL,
       MachinePointerInfo::getConstantPool(DAG.getMachineFunction()));
 }
 
+/// Check if a global variable needs sig mode handling.
+/// Returns true if:
+/// 1. SigMode is enabled, AND
+/// 2. The global variable's type contains pointers, AND
+/// 3. The global variable is not in raw address space (AS 100)
+static bool needsSigModeForGlobal(const GlobalValue *GV, 
+                                   const RISCVSubtarget &Subtarget) {
+  if (!Subtarget.isSigModeSupport())
+    return false;
+  
+  // Check if it's a GlobalVariable (not a function)
+  auto *GVar = dyn_cast<GlobalVariable>(GV);
+  if (!GVar)
+    return false;
+  
+  // Check address space - raw (AS 100) doesn't need sig handling
+  if (GVar->getAddressSpace() == 100)
+    return false;
+  
+  // Check if the type contains pointers
+  Type *Ty = GVar->getValueType();
+  return Ty->containsPointer();
+}
+
 template <class NodeTy>
 SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
                                      bool IsLocal, bool IsExternWeak) const {
   SDLoc DL(N);
   EVT Ty = getPointerTy(DAG.getDataLayout());
 
+  // Check if this global needs sig mode handling
+  // For non-GlobalAddressSDNode types, this will return false
+  bool UseSigMode = false;
+  if (auto *GAN = dyn_cast<GlobalAddressSDNode>(N))
+    UseSigMode = needsSigModeForGlobal(GAN->getGlobal(), Subtarget);
+
   // When HWASAN is used and tagging of global variables is enabled
   // they should be accessed via the GOT, since the tagged address of a global
   // is incompatible with existing code models. This also applies to non-pic
   // mode.
-  if (isPositionIndependent() || Subtarget.allowTaggedGlobals() || Subtarget.isSigModeSupport()) {
+  if (isPositionIndependent() || Subtarget.allowTaggedGlobals() || UseSigMode) {
     SDValue Addr = getTargetNode(N, DL, Ty, DAG, 0);
-    if (IsLocal && !Subtarget.allowTaggedGlobals() && !Subtarget.isSigModeSupport())
+    if (IsLocal && !Subtarget.allowTaggedGlobals() && !UseSigMode)
       // Use PC-relative addressing to access the symbol. This generates the
       // pattern (PseudoLLA sym), which expands to (addi (auipc %pcrel_hi(sym))
       // %pcrel_lo(auipc)).
@@ -9124,7 +9154,7 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
     // the address from the GOT. This generates the pattern (PseudoLGA sym),
     // which expands to (ld (addi (auipc %got_pcrel_hi(sym)) %pcrel_lo(auipc))).
     unsigned int opcode = RISCV::PseudoLGA;
-    if (Subtarget.isSigModeSupport()) {
+    if (UseSigMode) {
       opcode = RISCV::PseudoLSGA;
     } 
     SDValue Load =
@@ -9166,7 +9196,7 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
       // symbol. This generates the pattern (PseudoLGA sym), which expands to
       // (ld (addi (auipc %got_pcrel_hi(sym)) %pcrel_lo(auipc))).
       unsigned int opcode = RISCV::PseudoLGA;
-      if (Subtarget.isSigModeSupport()) {
+      if (UseSigMode) {
         opcode = RISCV::PseudoLSGA;
       } 
       SDValue Load =
