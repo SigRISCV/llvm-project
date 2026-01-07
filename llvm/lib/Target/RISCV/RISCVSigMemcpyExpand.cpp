@@ -237,9 +237,8 @@ private:
   bool extractConstantBytes(Constant *C, Type *Ty, SmallVectorImpl<uint8_t> &Bytes);
 
   // Generate inline stores of constant values
-  void generateConstantCopy(IRBuilder<> &Builder, Value *Dest,
-                            Constant *SrcConstant, Type *ElemTy, uint64_t NumElems,
-                            unsigned DestAS);
+  bool generateConstantCopy(IRBuilder<> &Builder, Value *Dest,
+                            Constant *SrcConstant, unsigned DestAS);
 };
 
 } // end anonymous namespace
@@ -1017,20 +1016,11 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
       if (SrcConstant) {
         LLVM_DEBUG(dbgs() << "  Found constant source, generating constant copy\n");
         
-        // Determine element type for constant copy
-        Type *CopyTy = ElemTy;
-        uint64_t NumElems = 1;
-        
-        if (!CopyTy) {
-          // No type recovery info, use i8 array
-          CopyTy = Type::getInt8Ty(*Ctx);
-          NumElems = ByteLen;
-        } else {
-          uint64_t ElemSize = DL->getTypeAllocSize(CopyTy);
-          NumElems = ByteLen / ElemSize;
+        if (!generateConstantCopy(Builder, Dest, SrcConstant, DestAS)) {
+          SmallVector<uint64_t, 8> EmptyOffsets;
+          generateBlockCopyByOffset(Builder, Dest, Src, ByteLen, EmptyOffsets, 
+                                  DestAS, SrcAS);
         }
-        
-        generateConstantCopy(Builder, Dest, SrcConstant, CopyTy, NumElems, DestAS);
         
         II->eraseFromParent();
         NumMemcpyExpanded++;
@@ -1041,7 +1031,6 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
         
         // No pointers in this copy
         SmallVector<uint64_t, 8> EmptyOffsets;
-        
         generateBlockCopyByOffset(Builder, Dest, Src, ByteLen, EmptyOffsets, 
                                   DestAS, SrcAS);
         
@@ -1938,25 +1927,21 @@ bool RISCVSigMemcpyExpand::extractConstantBytes(Constant *C, Type *Ty,
   return false;
 }
 
-void RISCVSigMemcpyExpand::generateConstantCopy(
+bool RISCVSigMemcpyExpand::generateConstantCopy(
     IRBuilder<> &Builder, Value *Dest,
-    Constant *SrcConstant, Type *ElemTy, uint64_t NumElems,
-    unsigned DestAS) {
+    Constant *SrcConstant, unsigned DestAS) {
   
+  Type* ElemTy = SrcConstant->getType();
+  uint64_t NumElems = 1;
   uint64_t ElemSize = DL->getTypeAllocSize(ElemTy);
   uint64_t TotalBytes = ElemSize * NumElems;
   
-  // Build array type for the full copy
-  Type *FullTy = (NumElems == 1) ? ElemTy : ArrayType::get(ElemTy, NumElems);
-  
   // Extract constant bytes
   SmallVector<uint8_t, 256> Bytes;
-  if (!extractConstantBytes(SrcConstant, FullTy, Bytes)) {
+  if (!extractConstantBytes(SrcConstant, ElemTy, Bytes)) {
     // Fall back to regular block copy if extraction fails
     LLVM_DEBUG(dbgs() << "  Constant extraction failed, falling back to block copy\n");
-    // For raw-to-raw without pointers, use memcpy
-    emitMemcpyCall(Builder, Dest, SrcConstant, Builder.getInt64(TotalBytes), DestAS, DestAS);
-    return;
+    return false;
   }
   
   // Ensure bytes array is padded to 8-byte alignment for our algorithm
@@ -2025,5 +2010,7 @@ void RISCVSigMemcpyExpand::generateConstantCopy(
     DataIdx += 1;
     Remain >>= 8;
   }
+
+  return true;
 }
 
