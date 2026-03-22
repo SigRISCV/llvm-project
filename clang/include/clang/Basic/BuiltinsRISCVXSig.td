@@ -34,4 +34,5 @@ def debug_chr : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
 def debug_int : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
 def debug_ptr : RISCVXSigBuiltin<"void(void*)", "experimental-xsig">;
 def debug_csr : RISCVXSigBuiltin<"void(uint64_t)", "experimental-xsig">;
+def debug_exit : RISCVXSigBuiltin<"void()", "experimental-xsig">;
 } // Attributes = [NoThrow, Const]

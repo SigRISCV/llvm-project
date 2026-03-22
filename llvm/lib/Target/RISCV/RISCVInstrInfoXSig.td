@@ -23,6 +23,9 @@ def xsig_debug_ptr : RVSDNode<"XSIG_DEBUG_PTR",
 def xsig_debug_csr : RVSDNode<"XSIG_DEBUG_CSR",
     SDTypeProfile<0, 1, [SDTCisVT<0, i64>]>, [SDNPHasChain]>;
 
+def xsig_debug_exit : RVSDNode<"XSIG_DEBUG_EXIT",
+    SDTypeProfile<0, 0, []>, [SDNPHasChain]>;
+
 def riscv_rcall     : RVSDNode<"RCALL", SDT_RISCVCall,
                                [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                 SDNPVariadic]>;
@@ -83,6 +86,7 @@ def : InstAlias<"debug.chr $rs1", (DEBUG X0, GPR:$rs1, 1)>;
 def : InstAlias<"debug.int $rs1", (DEBUG X0, GPR:$rs1, 2)>;
 def : InstAlias<"debug.ptr $rs1", (DEBUG X0, GPR:$rs1, 3)>;
 def : InstAlias<"debug.csr $rs1", (DEBUG X0, GPR:$rs1, 4)>;
+def : InstAlias<"debug.exit", (DEBUG X0, X0, 5)>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0, isBarrier = 1 in
 def SWITCHS : RVInstR<0b0000000, 0b100, OPC_CUSTOM_2, (outs GPR:$rd),
@@ -121,4 +125,5 @@ def : Pat<(xsig_debug_chr GPR:$rs1), (DEBUG GPR:$rs1, 1)>;
 def : Pat<(xsig_debug_int GPR:$rs1), (DEBUG GPR:$rs1, 2)>;
 def : Pat<(xsig_debug_ptr GPR:$rs1), (DEBUG GPR:$rs1, 3)>;
 def : Pat<(xsig_debug_csr GPR:$rs1), (DEBUG GPR:$rs1, 4)>;
+def : Pat<(xsig_debug_exit), (DEBUG (XLenVT X0), 5)>;
 }

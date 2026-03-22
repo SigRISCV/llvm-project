@@ -11659,6 +11659,9 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_VOID(SDValue Op,
   case Intrinsic::riscv_xsig_debug_csr: {
     return DAG.getNode(RISCVISD::XSIG_DEBUG_CSR, SDLoc(Op), MVT::Other, Op.getOperand(0), Op.getOperand(2));
   }
+  case Intrinsic::riscv_xsig_debug_exit: {
+    return DAG.getNode(RISCVISD::XSIG_DEBUG_EXIT, SDLoc(Op), MVT::Other, Op.getOperand(0));
+  }
   case Intrinsic::riscv_seg2_store_mask:
   case Intrinsic::riscv_seg3_store_mask:
   case Intrinsic::riscv_seg4_store_mask:

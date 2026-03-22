@@ -49,6 +49,9 @@ def int_riscv_xsig_debug_ptr : Intrinsic<[], [llvm_ptr_ty], [IntrNoMem, IntrHasS
 def int_riscv_xsig_debug_csr : Intrinsic<[], [llvm_i64_ty], [IntrNoMem, IntrHasSideEffects]>,
   ClangBuiltin<"__builtin_riscv_xsig_debug_csr">;
 
+def int_riscv_xsig_debug_exit : Intrinsic<[], [], [IntrNoMem, IntrHasSideEffects]>,
+  ClangBuiltin<"__builtin_riscv_xsig_debug_exit">;
+
 // SigMode memcpy intrinsic for copying structures/arrays with pointer members
 // Uses llvm_anyptr_ty to accept any address space (0 for sig, 100 for raw)
 // Type information is passed via type_metadata_id parameter:
