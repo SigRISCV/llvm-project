@@ -1161,6 +1161,8 @@ bool TypeRecovery::backpropStore(StoreInst *SI) {
   Value *Val = SI->getValueOperand();
   Value *Dest = SI->getPointerOperand();
   bool Changed = false;
+  if (Val == Dest)
+    return false;
 
   if (!Val->getType()->isPointerTy()) {
     return false;
