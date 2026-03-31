@@ -26,6 +26,14 @@
 
 using namespace llvm;
 
+static bool isBreakRecoverCallee(const Function *F) {
+  if (!F)
+    return false;
+
+  StringRef Name = F->getName();
+  return Name.contains("break.recover") || Name.contains("break_recover");
+}
+
 //===----------------------------------------------------------------------===//
 // Type String Generation
 //===----------------------------------------------------------------------===//
@@ -823,11 +831,13 @@ bool TypeRecovery::computeForwardTypes(Instruction *I) {
     changed = handleSelect(SI);
   } else if (auto *CB = dyn_cast<CallBase>(I)) {
     Function *Callee = CB->getCalledFunction();
-    if (Callee && (Callee->getName().contains("xsig.setnewid") ||
-                         Callee->getName().contains("xsig.setnewid") || 
-                         Callee->getName().contains("xsig.setrawid"))) {
+    if (isBreakRecoverCallee(Callee)) {
+      changed = false;
+    } else if (Callee && (Callee->getName().contains("xsig.setnewid") ||
+                          Callee->getName().contains("xsig.setnewid") ||
+                          Callee->getName().contains("xsig.setrawid"))) {
       changed = handleSetIDCall(CB);
-    } else if(!Callee) {
+    } else if (!Callee) {
       changed = handleCall(CB);
     }
   } else if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
@@ -1114,12 +1124,14 @@ bool TypeRecovery::propagateBackward(Value *V) {
   } else if (auto *CB = dyn_cast<CallBase>(I)) {
     // Check if it's memcpy
     Function *Callee = CB->getCalledFunction();
-    if (Callee && (Callee->getName().contains("memcpy") ||
-                   Callee->getName().contains("memmove"))) {
+    if (isBreakRecoverCallee(Callee)) {
+      changed = false;
+    } else if (Callee && (Callee->getName().contains("memcpy") ||
+                          Callee->getName().contains("memmove"))) {
       changed = backpropMemcpy(CB);
     } else if (Callee && (Callee->getName().contains("xsig.setnewid") ||
-                         Callee->getName().contains("xsig.setnewid") || 
-                         Callee->getName().contains("xsig.setrawid"))) {
+                          Callee->getName().contains("xsig.setnewid") ||
+                          Callee->getName().contains("xsig.setrawid"))) {
       changed = backpropSetIDCall(CB);
     } else {
       changed = backpropCall(CB);
@@ -1643,4 +1655,3 @@ void TypeRecovery::dumpFunction(Function &F, raw_ostream &OS) {
   
   OS << "}\n\n";
 }
-

@@ -11116,6 +11116,8 @@ SDValue RISCVTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
 
     return DAG.getNode(RISCVISD::XSIG_SETNEWID, DL, Op.getValueType(), Ptr);
   }
+  case Intrinsic::riscv_xsig_break_recover:
+    return Op.getOperand(1);
   case Intrinsic::riscv_tuple_insert: {
     SDValue Vec = Op.getOperand(1);
     SDValue SubVec = Op.getOperand(2);

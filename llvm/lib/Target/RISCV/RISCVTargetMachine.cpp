@@ -495,7 +495,11 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createBarrierNoopPass());
   }
 
+  // Skip GlobalMerge at -O1 by default to preserve more direct global layout
+  // for downstream SigMode type recovery/debugging. Users can still force it
+  // on with -mllvm -riscv-enable-global-merge.
   if ((TM->getOptLevel() != CodeGenOptLevel::None &&
+       TM->getOptLevel() != CodeGenOptLevel::Less &&
        EnableGlobalMerge == cl::BOU_UNSET) ||
       EnableGlobalMerge == cl::BOU_TRUE) {
     // FIXME: Like AArch64, we disable extern global merging by default due to

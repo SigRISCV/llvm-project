@@ -22,6 +22,9 @@ def int_riscv_xsig_setdummyid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoM
 def int_riscv_xsig_setnewid : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem, IntrWillReturn]>,
   ClangBuiltin<"__builtin_riscv_xsig_setnewid">;
 
+def int_riscv_xsig_break_recover : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem, IntrWillReturn]>,
+  ClangBuiltin<"__builtin_riscv_xsig_break_recover">;
+
 def int_riscv_xsig_load_sig : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrWillReturn, IntrReadMem, IntrArgMemOnly]>,
   ClangBuiltin<"__builtin_riscv_xsig_load_sig">;
 
