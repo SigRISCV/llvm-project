@@ -12690,9 +12690,12 @@ void Sema::CheckMain(FunctionDecl *FD, const DeclSpec &DS) {
     CharPP = CharPP.getRawChainType(getASTContext());
   }
   QualType Expected[] = { Context.IntTy, CharPP, CharPP, CharPP };
+  SmallVector<QualType, 4> NormalizedParamTypes(FTP->param_types());
+  bool NeedsSigModeMainParamUpdate = false;
 
   for (unsigned i = 0; i < nparams; ++i) {
     QualType AT = FTP->getParamType(i);
+    QualType NormalizedAT = AT;
 
     bool mismatch = true;
 
@@ -12707,16 +12710,22 @@ void Sema::CheckMain(FunctionDecl *FD, const DeclSpec &DS) {
       QualifierCollector qs;
       const PointerType* PT;
       if ((PT = qs.strip(AT)->getAs<PointerType>()) && 
-          (!isSigMode || PT->getPointeeType().isRawQualified()) &&
           (PT = qs.strip(PT->getPointeeType())->getAs<PointerType>()) &&
           Context.hasSameType(QualType(qs.strip(PT->getPointeeType()), 0),
                               Context.CharTy)) {
         qs.removeConst();
         if (isSigMode) {
           qs.removeRaw();
+          NormalizedAT = AT.getRawChainType(Context);
         }
         mismatch = !qs.empty();
       }
+    }
+
+    if (!mismatch && isSigMode && Expected[i] == CharPP &&
+        !Context.hasSameType(AT, NormalizedAT)) {
+      NormalizedParamTypes[i] = NormalizedAT;
+      NeedsSigModeMainParamUpdate = true;
     }
 
     if (mismatch) {
@@ -12724,6 +12733,16 @@ void Sema::CheckMain(FunctionDecl *FD, const DeclSpec &DS) {
       // TODO: suggest replacing given type with expected type
       FD->setInvalidDecl(true);
     }
+  }
+
+  if (NeedsSigModeMainParamUpdate && !FD->isInvalidDecl()) {
+    for (unsigned i = 0; i < nparams; ++i) {
+      if (!Context.hasSameType(FTP->getParamType(i), NormalizedParamTypes[i]))
+        FD->getParamDecl(i)->setType(NormalizedParamTypes[i]);
+    }
+    FD->setType(Context.getFunctionType(FTP->getReturnType(),
+                                        NormalizedParamTypes,
+                                        FTP->getExtProtoInfo()));
   }
 
   if (nparams == 1 && !FD->isInvalidDecl()) {
