@@ -69,6 +69,11 @@ public:
 
   ABIArgInfo coerceVLSVector(QualType Ty, unsigned ABIVLen = 0) const;
 
+  // SigMode helper. recursively collect pointer-typed leaf fields.
+  // Returns true iff Ty is a tightly-packed aggregate whose leaf fields are all pointers; 
+  // appends one llvm ptr per leaf in layout order.
+  bool collectSigModePointerFields(QualType Ty, SmallVectorImpl<llvm::Type *> &Fields) const;
+
   using ABIInfo::appendAttributeMangling;
   void appendAttributeMangling(TargetClonesAttr *Attr, unsigned Index,
                                raw_ostream &Out) const override;
@@ -389,6 +394,54 @@ ABIArgInfo RISCVABIInfo::coerceAndExpandFPCCEligibleStruct(
       llvm::StructType::get(getVMContext(), UnpaddedCoerceElts, IsPacked);
 
   return ABIArgInfo::getCoerceAndExpand(CoerceToType, UnpaddedCoerceToType);
+}
+
+// SigMode. recursively collect all leaf fields of Ty into Fields as opaque pointer LLVM types.
+//  Returns true iff Ty is a tightly-packed aggregate whose leaf fields are all C pointer types.
+//  Non-pointer leaves, unions, bitfields,or padding cause the function to return false immediately.
+bool RISCVABIInfo::collectSigModePointerFields(
+    QualType Ty, SmallVectorImpl<llvm::Type *> &Fields) const {
+  CharUnits ExpectedOffset = CharUnits::Zero();
+  Ty = Ty.getCanonicalType();
+
+  auto Collect = [&](auto &&Self, QualType CurTy) -> bool {
+    CurTy = CurTy.getCanonicalType();
+    if (CurTy->isPointerType()) {
+      Fields.push_back(llvm::PointerType::getUnqual(getVMContext()));
+      ExpectedOffset += getContext().getTypeSizeInChars(CurTy);
+      return true;
+    }
+
+    if (const auto *AT = getContext().getAsConstantArrayType(CurTy)) {
+      QualType ElemTy = AT->getElementType();
+      for (uint64_t I = 0, E = AT->getZExtSize(); I != E; ++I) {
+        if (!Self(Self, ElemTy))
+          return false;
+      }
+      return true;
+    }
+
+    if (const auto *RT = CurTy->getAs<RecordType>()) {
+      const RecordDecl *RD = RT->getDecl()->getDefinitionOrSelf();
+      if (RD->isUnion()) return false;
+      CharUnits RecordStart = ExpectedOffset;
+      for (const FieldDecl *FD : RD->fields()) {
+        if (FD->isBitField()) return false;
+
+        CharUnits FieldOffset =
+            getContext().toCharUnitsFromBits(getContext().getFieldOffset(FD));
+        if (RecordStart + FieldOffset != ExpectedOffset) return false;
+        if (!Self(Self, FD->getType())) return false;
+      }
+
+      return RecordStart + getContext().getTypeSizeInChars(CurTy) ==
+             ExpectedOffset;
+    }
+    return false;
+  };
+
+  if (!Collect(Collect, Ty)) return false;
+  return getContext().getTypeSizeInChars(Ty) == ExpectedOffset;
 }
 
 bool RISCVABIInfo::detectVLSCCEligibleStruct(QualType Ty, unsigned ABIVLen,
@@ -719,6 +772,21 @@ ABIArgInfo RISCVABIInfo::classifyArgumentType(QualType Ty, bool IsFixed,
   // Aggregates which are <= 2*XLen will be passed in registers if possible,
   // so coerce to integers.
   if (Size <= 2 * XLen) {
+    // SigMode. if the struct consists entirely of pointer-typed leaf fields,
+    // use CoerceAndExpand({ptr, ...}) instead of integer coercion.
+    // This preserves pointer-type loads/stores through SelectionDAGBuilder so that
+    // the backend emits ls/ss rather than ld/sd.
+    if (getContext().getTargetInfo().isSigModeSupported()) {
+      SmallVector<llvm::Type *, 4> PtrFields;
+      if (collectSigModePointerFields(Ty, PtrFields) && !PtrFields.empty()) {
+        auto *CoerceTy = llvm::StructType::get(getVMContext(),
+                                               ArrayRef<llvm::Type *>(PtrFields));
+        llvm::Type *UnpaddedTy =
+            (PtrFields.size() == 1) ? PtrFields[0] : (llvm::Type *)CoerceTy;
+        return ABIArgInfo::getCoerceAndExpand(CoerceTy, UnpaddedTy);
+      }
+    }
+
     unsigned Alignment = getContext().getTypeAlign(Ty);
 
     // Use a single XLen int if possible, 2*XLen if 2*XLen alignment is
@@ -743,6 +811,25 @@ ABIArgInfo RISCVABIInfo::classifyReturnType(QualType RetTy,
                                             unsigned ABIVLen) const {
   if (RetTy->isVoidType())
     return ABIArgInfo::getIgnore();
+
+  // SigMode aggregates made entirely of pointer leaf fields must preserve
+  // pointer-typed loads/stores on the return path as well as the argument path. 
+  // Otherwise the return-value shim falls back to integer coercion and
+  // emits raw ld/sd copies that break signed-pointer semantics.
+  if (getContext().getTargetInfo().isSigModeSupported() &&
+      RetTy->isStructureOrClassType()) {
+    uint64_t Size = getContext().getTypeSize(RetTy);
+    if (Size <= 2 * XLen) {
+      SmallVector<llvm::Type *, 4> PtrFields;
+      if (collectSigModePointerFields(RetTy, PtrFields) && !PtrFields.empty()) {
+        auto *CoerceTy = llvm::StructType::get(
+            getVMContext(), ArrayRef<llvm::Type *>(PtrFields));
+        llvm::Type *UnpaddedTy =
+            (PtrFields.size() == 1) ? PtrFields[0] : (llvm::Type *)CoerceTy;
+        return ABIArgInfo::getCoerceAndExpand(CoerceTy, UnpaddedTy);
+      }
+    }
+  }
 
   int ArgGPRsLeft = 2;
   int ArgFPRsLeft = FLen ? 2 : 0;

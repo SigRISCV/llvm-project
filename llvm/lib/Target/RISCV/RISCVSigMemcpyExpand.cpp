@@ -238,7 +238,8 @@ private:
 
   // Generate inline stores of constant values
   bool generateConstantCopy(IRBuilder<> &Builder, Value *Dest,
-                            Constant *SrcConstant, unsigned DestAS);
+                            Constant *SrcConstant, unsigned DestAS,
+                            uint64_t ByteLen = maxUIntN(uint64_t(64)));
 };
 
 } // end anonymous namespace
@@ -1016,7 +1017,7 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
       if (SrcConstant) {
         LLVM_DEBUG(dbgs() << "  Found constant source, generating constant copy\n");
         
-        if (!generateConstantCopy(Builder, Dest, SrcConstant, DestAS)) {
+        if (!generateConstantCopy(Builder, Dest, SrcConstant, DestAS, ByteLen)) {
           SmallVector<uint64_t, 8> EmptyOffsets;
           generateBlockCopyByOffset(Builder, Dest, Src, ByteLen, EmptyOffsets, 
                                   DestAS, SrcAS);
@@ -1929,12 +1930,17 @@ bool RISCVSigMemcpyExpand::extractConstantBytes(Constant *C, Type *Ty,
 
 bool RISCVSigMemcpyExpand::generateConstantCopy(
     IRBuilder<> &Builder, Value *Dest,
-    Constant *SrcConstant, unsigned DestAS) {
-  
+    Constant *SrcConstant, unsigned DestAS,
+    uint64_t ByteLen) {
+
   Type* ElemTy = SrcConstant->getType();
   uint64_t NumElems = 1;
   uint64_t ElemSize = DL->getTypeAllocSize(ElemTy);
-  uint64_t TotalBytes = ElemSize * NumElems;
+  uint64_t ConstBytes = ElemSize * NumElems;
+  // Respect the requested copy length — do not copy more bytes than ByteLen
+  // (e.g. memcpy(charFirst, SRC_STR, sizeof(charFirst)) must not spill into
+  //  adjacent struct fields even when SRC_STR is larger than charFirst).
+  uint64_t TotalBytes = (ByteLen < ConstBytes) ? ByteLen : ConstBytes;
   
   // Extract constant bytes
   SmallVector<uint8_t, 256> Bytes;

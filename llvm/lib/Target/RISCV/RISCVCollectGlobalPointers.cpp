@@ -1137,8 +1137,9 @@ void RISCVCollectGlobalPointers::generateExtFixupSections(Module &M, const DataL
   IntegerType *PtrSizedIntTy = Type::getIntNTy(Ctx, PtrSize * 8);
   IntegerType *I64Ty = Type::getInt64Ty(Ctx);
 
-  if (ExtFixupMap.empty() && ExtGOTMap.empty()) {
-    LLVM_DEBUG(dbgs() << "No external references, skipping ext fixup sections\n");
+  if (ExtFixupMap.empty()) {
+    LLVM_DEBUG(dbgs() << "No external fixup locations, emitting zero ext-fixup "
+                         "counter and skipping ext fixup sections\n");
     GlobalVariable *CountGV = new GlobalVariable(M, I64Ty, true, GlobalValue::PrivateLinkage,
         ConstantInt::get(I64Ty, 0), "");
     CountGV->setSection(SectionHeader);

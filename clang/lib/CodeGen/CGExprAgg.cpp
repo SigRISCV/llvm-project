@@ -249,6 +249,77 @@ public:
 };
 }  // end anonymous namespace.
 
+// Return true only for aggregates whose layout is exactly a packed sequence of pointer leaves.
+// We intentionally reject unions, bitfields, and any padding, since
+// the fieldwise copy below must match the source object layout byte-for-byte.
+static bool isSigModePointerOnlyAggregate(ASTContext &Ctx, QualType Ty) {
+  Ty = Ty.getCanonicalType();
+  if (Ty->isPointerType()) return true;
+
+  if (const auto *AT = Ctx.getAsConstantArrayType(Ty))
+    return isSigModePointerOnlyAggregate(Ctx, AT->getElementType());
+
+  const auto *RT = Ty->getAs<RecordType>();
+  if (!RT) return false;
+
+  const RecordDecl *RD = RT->getDecl()->getDefinitionOrSelf();
+  if (RD->isUnion()) return false;
+
+  CharUnits ExpectedOffset = CharUnits::Zero();
+  for (const FieldDecl *FD : RD->fields()) {
+    if (FD->isBitField()) return false;
+    if (!isSigModePointerOnlyAggregate(Ctx, FD->getType())) return false;
+
+    CharUnits FieldOffset = Ctx.toCharUnitsFromBits(Ctx.getFieldOffset(FD));
+    if (FieldOffset != ExpectedOffset) return false;
+    ExpectedOffset += Ctx.getTypeSizeInChars(FD->getType());
+  }
+  return Ctx.getTypeSizeInChars(Ty) == ExpectedOffset;
+}
+
+// Keep pointer-only aggregate copies typed in SigMode so the copy path uses
+// scalar pointer loads/stores. If this aggregate is lowered to memcpy first,
+// the backend sees raw bytes again and may reintroduce ld/sd on local or
+// return-by-value paths that should preserve signed-pointer semantics.
+static void EmitSigModePointerOnlyCopy(CodeGenFunction &CGF, LValue Dest,
+                                       LValue Src, QualType Ty,
+                                       bool IsVolatile) {
+  ASTContext &Ctx = CGF.getContext();
+  Ty = Ty.getCanonicalType();
+
+  if (Ty->isPointerType()) {
+    bool SrcVolatile = Src.isVolatileQualified() || IsVolatile;
+    bool DestVolatile = Dest.isVolatileQualified() || IsVolatile;
+    llvm::Value *Value =
+        CGF.EmitLoadOfScalar(Src.getAddress(), SrcVolatile, Ty, SourceLocation(),
+                             Src.getBaseInfo(), Src.getTBAAInfo());
+    CGF.EmitStoreOfScalar(Value, Dest.getAddress(), DestVolatile, Ty,
+                          Dest.getBaseInfo(), Dest.getTBAAInfo(),
+                          /*isInit=*/true);
+    return;
+  }
+
+  if (const auto *AT = Ctx.getAsConstantArrayType(Ty)) {
+    QualType ElementTy = AT->getElementType();
+    for (uint64_t I = 0, E = AT->getZExtSize(); I != E; ++I) {
+      Address DestElt = CGF.Builder.CreateConstArrayGEP(Dest.getAddress(), I);
+      Address SrcElt = CGF.Builder.CreateConstArrayGEP(Src.getAddress(), I);
+      EmitSigModePointerOnlyCopy(CGF, CGF.MakeAddrLValue(DestElt, ElementTy),
+                                 CGF.MakeAddrLValue(SrcElt, ElementTy),
+                                 ElementTy, IsVolatile);
+    }
+    return;
+  }
+
+  const auto *RT = Ty->getAs<RecordType>();
+  assert(RT && "expected pointer-only aggregate to be an array or record");
+  for (const FieldDecl *FD : RT->getDecl()->getDefinitionOrSelf()->fields()) {
+    EmitSigModePointerOnlyCopy(CGF, CGF.EmitLValueForField(Dest, FD),
+                               CGF.EmitLValueForField(Src, FD), FD->getType(),
+                               IsVolatile);
+  }
+}
+
 //===----------------------------------------------------------------------===//
 //                                Utilities
 //===----------------------------------------------------------------------===//
@@ -2290,6 +2361,16 @@ void CodeGenFunction::EmitAggregateCopy(LValue Dest, LValue Src, QualType Ty,
                                                                   Src))
         return;
     }
+  }
+
+  // Pointer-only SigMode aggregates must keep typed pointer accesses all the
+  // way through local aggregate copies. Lowering these copies to memcpy
+  // reintroduces raw ld/sd traffic on the return path before SelectionDAG has
+  // a chance to preserve signed-pointer semantics.
+  if (getContext().getTargetInfo().isSigModeSupported() &&
+      isSigModePointerOnlyAggregate(getContext(), Ty)) {
+    EmitSigModePointerOnlyCopy(*this, Dest, Src, Ty, isVolatile);
+    return;
   }
 
   // Aggregate assignment turns into llvm.memcpy.  This is almost valid per
