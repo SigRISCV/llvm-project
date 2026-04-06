@@ -1004,6 +1004,7 @@ bool RISCVSigMemcpyExpand::expandSigMemcpy(CallInst* II) {
   IRBuilder<> Builder(II);
   
   if (IsRawToRaw || !HasPointers) {
+    return true;
     // For raw-to-raw or no-pointer cases, check if we can inline small copies
     if (ByteLen != maxUIntN(64) && ByteLen <= InlineThreshold) {
       LLVM_DEBUG(dbgs() << "  Checking raw-to-raw inline expansion for " 
