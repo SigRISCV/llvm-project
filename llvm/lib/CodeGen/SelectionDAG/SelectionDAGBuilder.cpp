@@ -6636,6 +6636,12 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
     // @llvm.memcpy.inline defines 0 and 1 to both mean no alignment.
     Align DstAlign = MCI.getDestAlign().valueOrOne();
     Align SrcAlign = MCI.getSourceAlign().valueOrOne();
+    const Value *DstBase = I.getArgOperand(0)->stripPointerCasts();
+    const Value *SrcBase = I.getArgOperand(1)->stripPointerCasts();
+    DstAlign = std::max(
+        DstAlign, DstBase->getPointerAlignment(DAG.getDataLayout()));
+    SrcAlign = std::max(
+        SrcAlign, SrcBase->getPointerAlignment(DAG.getDataLayout()));
     Align Alignment = std::min(DstAlign, SrcAlign);
     bool isVol = MCI.isVolatile();
     // FIXME: Support passing different dest/src alignments to the memcpy DAG
@@ -6653,16 +6659,20 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
   case Intrinsic::memset_inline: {
     const auto &MSII = cast<MemSetInst>(I);
     SDValue Dst = getValue(I.getArgOperand(0));
-    SDValue Value = getValue(I.getArgOperand(1));
+    SDValue MemSetValue = getValue(I.getArgOperand(1));
     SDValue Size = getValue(I.getArgOperand(2));
     assert((!MSII.isForceInlined() || isa<ConstantSDNode>(Size)) &&
            "memset_inline needs constant size");
     // @llvm.memset defines 0 and 1 to both mean no alignment.
     Align DstAlign = MSII.getDestAlign().valueOrOne();
+    const Value *DstBase = I.getArgOperand(0)->stripPointerCasts();
+    DstAlign = std::max(
+        DstAlign, DstBase->getPointerAlignment(DAG.getDataLayout()));
     bool isVol = MSII.isVolatile();
     SDValue Root = isVol ? getRoot() : getMemoryRoot();
     SDValue MC = DAG.getMemset(
-        Root, sdl, Dst, Value, Size, DstAlign, isVol, MSII.isForceInlined(),
+        Root, sdl, Dst, MemSetValue, Size, DstAlign, isVol,
+        MSII.isForceInlined(),
         &I, MachinePointerInfo(I.getArgOperand(0)), I.getAAMetadata());
     updateDAGForMaybeTailCall(MC);
     return;
@@ -6675,6 +6685,12 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
     // @llvm.memmove defines 0 and 1 to both mean no alignment.
     Align DstAlign = MMI.getDestAlign().valueOrOne();
     Align SrcAlign = MMI.getSourceAlign().valueOrOne();
+    const Value *DstBase = I.getArgOperand(0)->stripPointerCasts();
+    const Value *SrcBase = I.getArgOperand(1)->stripPointerCasts();
+    DstAlign = std::max(
+        DstAlign, DstBase->getPointerAlignment(DAG.getDataLayout()));
+    SrcAlign = std::max(
+        SrcAlign, SrcBase->getPointerAlignment(DAG.getDataLayout()));
     Align Alignment = std::min(DstAlign, SrcAlign);
     bool isVol = MMI.isVolatile();
     // FIXME: Support passing different dest/src alignments to the memmove DAG

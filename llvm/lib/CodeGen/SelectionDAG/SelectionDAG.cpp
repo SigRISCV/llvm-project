@@ -8509,8 +8509,16 @@ SDValue SelectionDAG::getMemBasePlusOffset(SDValue Ptr, SDValue Offset,
   return getNode(ISD::ADD, DL, BasePtrVT, Ptr, Offset, AddFlags);
 }
 
+static SDValue stripMemPtrCasts(SDValue Ptr) {
+  while (Ptr.getOpcode() == ISD::ADDRSPACECAST ||
+         Ptr.getOpcode() == ISD::BITCAST)
+    Ptr = Ptr.getOperand(0);
+  return Ptr;
+}
+
 /// Returns true if memcpy source is constant data.
 static bool isMemSrcFromConstant(SDValue Src, ConstantDataArraySlice &Slice) {
+  Src = stripMemPtrCasts(Src);
   uint64_t SrcDelta = 0;
   GlobalAddressSDNode *G = nullptr;
   if (Src.getOpcode() == ISD::GlobalAddress)
@@ -8584,9 +8592,17 @@ static SDValue getMemcpyLoadsAndStores(
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   bool OptSize = shouldLowerMemFuncForSize(MF, DAG);
-  FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Dst);
+  SDValue BaseDst = stripMemPtrCasts(Dst);
+  FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(BaseDst);
   if (FI && !MFI.isFixedObjectIndex(FI->getIndex()))
     DstAlignCanChange = true;
+  else if (DAG.isBaseWithConstantOffset(BaseDst) &&
+           isa<FrameIndexSDNode>(BaseDst.getOperand(0)) &&
+           !MFI.isFixedObjectIndex(
+               cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex()))
+    DstAlignCanChange = true;
+  if (MaybeAlign DstAlign = DAG.InferPtrAlign(Dst))
+    Alignment = std::max(Alignment, *DstAlign);
   MaybeAlign SrcAlign = DAG.InferPtrAlign(Src);
   if (!SrcAlign || Alignment > *SrcAlign)
     SrcAlign = Alignment;
@@ -8785,9 +8801,17 @@ static SDValue getMemmoveLoadsAndStores(SelectionDAG &DAG, const SDLoc &dl,
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   bool OptSize = shouldLowerMemFuncForSize(MF, DAG);
-  FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Dst);
+  SDValue BaseDst = stripMemPtrCasts(Dst);
+  FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(BaseDst);
   if (FI && !MFI.isFixedObjectIndex(FI->getIndex()))
     DstAlignCanChange = true;
+  else if (DAG.isBaseWithConstantOffset(BaseDst) &&
+           isa<FrameIndexSDNode>(BaseDst.getOperand(0)) &&
+           !MFI.isFixedObjectIndex(
+               cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex()))
+    DstAlignCanChange = true;
+  if (MaybeAlign DstAlign = DAG.InferPtrAlign(Dst))
+    Alignment = std::max(Alignment, *DstAlign);
   MaybeAlign SrcAlign = DAG.InferPtrAlign(Src);
   if (!SrcAlign || Alignment > *SrcAlign)
     SrcAlign = Alignment;
@@ -13433,6 +13457,9 @@ bool SelectionDAG::areNonVolatileConsecutiveLoads(LoadSDNode *LD,
 /// InferPtrAlignment - Infer alignment of a load / store address. Return
 /// std::nullopt if it cannot be inferred.
 MaybeAlign SelectionDAG::InferPtrAlign(SDValue Ptr) const {
+  if (Ptr.getOpcode() == ISD::ADDRSPACECAST || Ptr.getOpcode() == ISD::BITCAST)
+    return InferPtrAlign(Ptr.getOperand(0));
+
   // If this is a GlobalAddress + cst, return the alignment.
   const GlobalValue *GV = nullptr;
   int64_t GVOffset = 0;
