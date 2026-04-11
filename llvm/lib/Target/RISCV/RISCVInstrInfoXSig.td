@@ -29,6 +29,9 @@ def xsig_debug_exit : RVSDNode<"XSIG_DEBUG_EXIT",
 def riscv_rcall     : RVSDNode<"RCALL", SDT_RISCVCall,
                                [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                 SDNPVariadic]>;
+def riscv_rtail     : RVSDNode<"RTAIL", SDT_RISCVCall,
+                               [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
+                                SDNPVariadic]>;
 
 let Predicates = [HasVendorXSig] in {
 
@@ -102,6 +105,17 @@ def PseudoRCALL : Pseudo<(outs), (ins call_symbol:$func), [],
                         "rcall", "$func">;
 def PseudoRCALLIndirect : Pseudo<(outs), (ins GPRJALR:$rs1), [(riscv_rcall GPRJALR:$rs1)]>,
                          PseudoInstExpansion<(SWITCHS X1, GPR:$rs1, X0)>;
+
+let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1, Uses = [X2],
+    Size = 8, isCodeGenOnly = 0, hasSideEffects = 0,
+    mayStore = 0, mayLoad = 0 in
+def PseudoRTAIL : Pseudo<(outs), (ins call_symbol:$dst), [],
+                         "rtail", "$dst">;
+
+let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1, Uses = [X2] in
+def PseudoRTAILIndirect : Pseudo<(outs), (ins GPRTC:$rs1),
+                                 [(riscv_rtail GPRTC:$rs1)]>,
+                          PseudoInstExpansion<(SWITCHS X0, GPR:$rs1, X0)>;
 let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 0,
     isAsmParserOnly = 1 in
 def PseudoLSGA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
@@ -116,6 +130,8 @@ def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
 def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
 def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
 def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
+def : Pat<(riscv_rtail tglobaladdr:$func), (PseudoRTAIL tglobaladdr:$func)>;
+def : Pat<(riscv_rtail texternalsym:$func), (PseudoRTAIL texternalsym:$func)>;
 def : LdPat<sigload, LS, i64>;
 def : StPat<sigstore, SS, GPR, i64>;
 def : LdPat<dynsigload, LS_MAP, i64>;

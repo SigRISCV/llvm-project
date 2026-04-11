@@ -24058,7 +24058,10 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
   if (IsTailCall) {
     MF.getFrameInfo().setHasTailCall();
     unsigned CallOpc =
-        NeedSWGuarded ? RISCVISD::SW_GUARDED_TAIL : RISCVISD::TAIL;
+        NeedSWGuarded ? RISCVISD::SW_GUARDED_TAIL
+                      : (CLI.IsRaw || CalleeIsLibcMemoryFunc)
+                            ? RISCVISD::RTAIL
+                            : RISCVISD::TAIL;
     SDValue Ret = DAG.getNode(CallOpc, DL, NodeTys, Ops);
     if (CLI.CFIType)
       Ret.getNode()->setCFIType(CLI.CFIType->getZExtValue());

@@ -56,6 +56,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
@@ -8516,6 +8517,33 @@ static SDValue stripMemPtrCasts(SDValue Ptr) {
   return Ptr;
 }
 
+static int findFrameIndexForAlloca(const MachineFrameInfo &MFI,
+                                   const AllocaInst *AI) {
+  for (int I = MFI.getObjectIndexBegin(), E = MFI.getObjectIndexEnd(); I != E;
+       ++I)
+    if (MFI.getObjectAllocation(I) == AI)
+      return I;
+  return INT_MIN;
+}
+
+static int inferFrameIndexFromPtrInfo(const MachinePointerInfo &PtrInfo,
+                                      const DataLayout &DL,
+                                      const MachineFrameInfo &MFI) {
+  const Value *Ptr = dyn_cast_if_present<const Value *>(PtrInfo.V);
+  if (!Ptr)
+    return INT_MIN;
+
+  int64_t Offset = PtrInfo.Offset;
+  const Value *Base =
+      GetPointerBaseWithConstantOffset(Ptr, Offset, DL,
+                                       /*AllowNonInbounds=*/true);
+  auto *AI = dyn_cast_or_null<const AllocaInst>(Base);
+  if (!AI)
+    return INT_MIN;
+
+  return findFrameIndexForAlloca(MFI, AI);
+}
+
 /// Returns true if memcpy source is constant data.
 static bool isMemSrcFromConstant(SDValue Src, ConstantDataArraySlice &Slice) {
   Src = stripMemPtrCasts(Src);
@@ -8592,15 +8620,23 @@ static SDValue getMemcpyLoadsAndStores(
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   bool OptSize = shouldLowerMemFuncForSize(MF, DAG);
+  int FrameIdx = INT_MIN;
   SDValue BaseDst = stripMemPtrCasts(Dst);
   FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(BaseDst);
-  if (FI && !MFI.isFixedObjectIndex(FI->getIndex()))
+  if (FI && !MFI.isFixedObjectIndex(FI->getIndex())) {
+    FrameIdx = FI->getIndex();
     DstAlignCanChange = true;
-  else if (DAG.isBaseWithConstantOffset(BaseDst) &&
-           isa<FrameIndexSDNode>(BaseDst.getOperand(0)) &&
-           !MFI.isFixedObjectIndex(
-               cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex()))
+  } else if (DAG.isBaseWithConstantOffset(BaseDst) &&
+             isa<FrameIndexSDNode>(BaseDst.getOperand(0)) &&
+             !MFI.isFixedObjectIndex(
+                 cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex())) {
+    FrameIdx = cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex();
     DstAlignCanChange = true;
+  } else {
+    FrameIdx = inferFrameIndexFromPtrInfo(DstPtrInfo, DL, MFI);
+    if (FrameIdx != INT_MIN && !MFI.isFixedObjectIndex(FrameIdx))
+      DstAlignCanChange = true;
+  }
   if (MaybeAlign DstAlign = DAG.InferPtrAlign(Dst))
     Alignment = std::max(Alignment, *DstAlign);
   MaybeAlign SrcAlign = DAG.InferPtrAlign(Src);
@@ -8636,8 +8672,8 @@ static SDValue getMemcpyLoadsAndStores(
 
     if (NewAlign > Alignment) {
       // Give the stack frame object a larger alignment if needed.
-      if (MFI.getObjectAlign(FI->getIndex()) < NewAlign)
-        MFI.setObjectAlignment(FI->getIndex(), NewAlign);
+      if (MFI.getObjectAlign(FrameIdx) < NewAlign)
+        MFI.setObjectAlignment(FrameIdx, NewAlign);
       Alignment = NewAlign;
     }
   }
@@ -8801,15 +8837,23 @@ static SDValue getMemmoveLoadsAndStores(SelectionDAG &DAG, const SDLoc &dl,
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   bool OptSize = shouldLowerMemFuncForSize(MF, DAG);
+  int FrameIdx = INT_MIN;
   SDValue BaseDst = stripMemPtrCasts(Dst);
   FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(BaseDst);
-  if (FI && !MFI.isFixedObjectIndex(FI->getIndex()))
+  if (FI && !MFI.isFixedObjectIndex(FI->getIndex())) {
+    FrameIdx = FI->getIndex();
     DstAlignCanChange = true;
-  else if (DAG.isBaseWithConstantOffset(BaseDst) &&
-           isa<FrameIndexSDNode>(BaseDst.getOperand(0)) &&
-           !MFI.isFixedObjectIndex(
-               cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex()))
+  } else if (DAG.isBaseWithConstantOffset(BaseDst) &&
+             isa<FrameIndexSDNode>(BaseDst.getOperand(0)) &&
+             !MFI.isFixedObjectIndex(
+                 cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex())) {
+    FrameIdx = cast<FrameIndexSDNode>(BaseDst.getOperand(0))->getIndex();
     DstAlignCanChange = true;
+  } else {
+    FrameIdx = inferFrameIndexFromPtrInfo(DstPtrInfo, DL, MFI);
+    if (FrameIdx != INT_MIN && !MFI.isFixedObjectIndex(FrameIdx))
+      DstAlignCanChange = true;
+  }
   if (MaybeAlign DstAlign = DAG.InferPtrAlign(Dst))
     Alignment = std::max(Alignment, *DstAlign);
   MaybeAlign SrcAlign = DAG.InferPtrAlign(Src);
@@ -8839,8 +8883,8 @@ static SDValue getMemmoveLoadsAndStores(SelectionDAG &DAG, const SDLoc &dl,
 
     if (NewAlign > Alignment) {
       // Give the stack frame object a larger alignment if needed.
-      if (MFI.getObjectAlign(FI->getIndex()) < NewAlign)
-        MFI.setObjectAlignment(FI->getIndex(), NewAlign);
+      if (MFI.getObjectAlign(FrameIdx) < NewAlign)
+        MFI.setObjectAlignment(FrameIdx, NewAlign);
       Alignment = NewAlign;
     }
   }
