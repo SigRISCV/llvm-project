@@ -247,6 +247,7 @@ void RISCVMCCodeEmitter::expandFunctionRTail(const MCInst &MI,
   MCRegister T1;
   Func = MI.getOperand(0);
   T1 = RISCVII::getTailExpandUseRegNo(STI.getFeatureBits());
+  MCRegister Ra = RISCV::X1;
 
   uint32_t Binary;
 
@@ -262,7 +263,7 @@ void RISCVMCCodeEmitter::expandFunctionRTail(const MCInst &MI,
   support::endian::write(CB, Binary, llvm::endianness::little);
 
   TmpInst =
-      MCInstBuilder(RISCV::SWITCHS).addReg(RISCV::X0).addReg(T1).addReg(RISCV::X0);
+      MCInstBuilder(RISCV::SWITCHS).addReg(RISCV::X0).addReg(T1).addReg(Ra);
   Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
   support::endian::write(CB, Binary, llvm::endianness::little);
 }
