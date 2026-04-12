@@ -23413,10 +23413,30 @@ static SDValue convertValVTToLocVT(SelectionDAG &DAG, SDValue Val,
   return Val;
 }
 
+static MachineMemOperand::Flags
+getSigArgMemFlags(const RISCVSubtarget &Subtarget, bool IsRawFunction,
+                  const ISD::ArgFlagsTy &Flags, const CCValAssign &VA) {
+  if (!Subtarget.isSigModeSupport())
+    return MachineMemOperand::MONone;
+  if (IsRawFunction)
+    return MachineMemOperand::MONone;
+
+  // For stack-passed arguments, we need to preserve whether the slot contains
+  // a pointer value so the callee can recover it with `ls` instead of `ld`.
+  // CCValAssign::Indirect is also pointer-like here: the ABI-passed value is
+  // the address of the real argument object.
+  if (Flags.isPointer() || VA.getLocInfo() == CCValAssign::Indirect)
+    return MachineMemOperand::MOEncrypted;
+
+  return MachineMemOperand::MONone;
+}
+
 // The caller is responsible for loading the full value if the argument is
 // passed with CCValAssign::Indirect.
 static SDValue unpackFromMemLoc(SelectionDAG &DAG, SDValue Chain,
-                                const CCValAssign &VA, const SDLoc &DL) {
+                                const CCValAssign &VA,
+                                const ISD::InputArg &In, const SDLoc &DL,
+                                const RISCVSubtarget &Subtarget) {
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   EVT LocVT = VA.getLocVT();
@@ -23442,9 +23462,17 @@ static SDValue unpackFromMemLoc(SelectionDAG &DAG, SDValue Chain,
   case CCValAssign::BCvt:
     break;
   }
-  Val = DAG.getExtLoad(
-      ExtType, DL, LocVT, Chain, FIN,
-      MachinePointerInfo::getFixedStack(DAG.getMachineFunction(), FI), ValVT);
+  Val = DAG.getExtLoad(ExtType, DL, LocVT, Chain, FIN,
+                       MachinePointerInfo::getFixedStack(
+                           DAG.getMachineFunction(), FI),
+                       ValVT, MaybeAlign(),
+                       getSigArgMemFlags(
+                           Subtarget,
+                           DAG.getMachineFunction()
+                               .getFunction()
+                               .getFunctionType()
+                               ->getRaw(),
+                           In.Flags, VA));
   return Val;
 }
 
@@ -23587,7 +23615,7 @@ SDValue RISCVTargetLowering::LowerFormalArguments(
     } else if (VA.isRegLoc())
       ArgValue = unpackFromRegLoc(DAG, Chain, VA, DL, Ins[InsIdx], *this);
     else
-      ArgValue = unpackFromMemLoc(DAG, Chain, VA, DL);
+      ArgValue = unpackFromMemLoc(DAG, Chain, VA, Ins[InsIdx], DL, Subtarget);
 
     if (VA.getLocInfo() == CCValAssign::Indirect) {
       // If the original argument was split and passed by reference (e.g. i128
@@ -23954,10 +23982,8 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
                       DAG.getIntPtrConstant(VA.getLocMemOffset(), DL));
 
       // Emit the store.
-      MachineMemOperand::Flags MMOFlags = MachineMemOperand::MONone;
-      if (Subtarget.isSigModeSupport()) {
-        MMOFlags = MachineMemOperand::MODynEncrypted;
-      }
+      MachineMemOperand::Flags MMOFlags =
+          getSigArgMemFlags(Subtarget, CLI.IsRaw, Flags, VA);
       MemOpChains.push_back(
           DAG.getStore(Chain, DL, ArgValue, Address,
                       MachinePointerInfo::getStack(MF, VA.getLocMemOffset()),
