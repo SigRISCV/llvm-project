@@ -70,9 +70,15 @@ public:
   ABIArgInfo coerceVLSVector(QualType Ty, unsigned ABIVLen = 0) const;
 
   // SigMode helper. recursively collect pointer-typed leaf fields.
-  // Returns true iff Ty is a tightly-packed aggregate whose leaf fields are all pointers; 
+  // Returns true iff Ty is a tightly-packed aggregate whose leaf fields are all pointers;
   // appends one llvm ptr per leaf in layout order.
   bool collectSigModePointerFields(QualType Ty, SmallVectorImpl<llvm::Type *> &Fields) const;
+
+  // SigMode helper. detect a tightly-packed 16-byte aggregate made of exactly
+  // two XLEN-sized leaf fields where one leaf is a non-raw pointer and the
+  // other is plain data. We conservatively disable small-aggregate register
+  // coercion for this mixed case.
+  bool isSigModeMixedPtrDataAggregate(QualType Ty) const;
 
   using ABIInfo::appendAttributeMangling;
   void appendAttributeMangling(TargetClonesAttr *Attr, unsigned Index,
@@ -444,6 +450,66 @@ bool RISCVABIInfo::collectSigModePointerFields(
   return getContext().getTypeSizeInChars(Ty) == ExpectedOffset;
 }
 
+bool RISCVABIInfo::isSigModeMixedPtrDataAggregate(QualType Ty) const {
+  if (!getContext().getTargetInfo().isSigModeSupported())
+    return false;
+  if (Ty.getAddressSpace() != LangAS::Default)
+    return false;
+  if (Ty.getAddressSpaceUnderSigMode() == LangAS::sigmode_raw)
+    return false;
+  if (getContext().getTypeSize(Ty) != 2 * XLen)
+    return false;
+
+  const auto *RT = Ty->getAs<RecordType>();
+  if (!RT)
+    return false;
+  if (RT->getDecl()->getDefinitionOrSelf()->isUnion())
+    return false;
+
+  unsigned PointerCount = 0;
+  unsigned DataCount = 0;
+
+  auto CountFields = [&](auto &&Self, QualType CurTy) -> bool {
+    CurTy = CurTy.getCanonicalType();
+
+    if (CurTy->isPointerType()) {
+      ++PointerCount;
+      return true;
+    }
+
+    if (CurTy->isIntegralOrEnumerationType() || CurTy->isRealFloatingType()) {
+      ++DataCount;
+      return true;
+    }
+
+    if (const auto *AT = getContext().getAsConstantArrayType(CurTy)) {
+      for (uint64_t I = 0, E = AT->getZExtSize(); I != E; ++I)
+        if (!Self(Self, AT->getElementType()))
+          return false;
+      return true;
+    }
+
+    if (const auto *InnerRT = CurTy->getAs<RecordType>()) {
+      const RecordDecl *RD = InnerRT->getDecl()->getDefinitionOrSelf();
+      if (RD->isUnion())
+        return false;
+      for (const FieldDecl *FD : RD->fields()) {
+        if (FD->isBitField())
+          return false;
+        if (!Self(Self, FD->getType()))
+          return false;
+      }
+      return true;
+    }
+
+    return false;
+  };
+
+  if (!CountFields(CountFields, Ty))
+    return false;
+  return PointerCount > 0 && DataCount > 0;
+}
+
 bool RISCVABIInfo::detectVLSCCEligibleStruct(QualType Ty, unsigned ABIVLen,
                                              llvm::Type *&VLSType) const {
   // No riscv_vls_cc attribute.
@@ -772,6 +838,12 @@ ABIArgInfo RISCVABIInfo::classifyArgumentType(QualType Ty, bool IsFixed,
   // Aggregates which are <= 2*XLen will be passed in registers if possible,
   // so coerce to integers.
   if (Size <= 2 * XLen) {
+    if (isSigModeMixedPtrDataAggregate(Ty)) {
+      return getNaturalAlignIndirect(
+          Ty, /*AddrSpace=*/getDataLayout().getAllocaAddrSpace(),
+          /*ByVal=*/false);
+    }
+
     // SigMode. if the struct consists entirely of pointer-typed leaf fields,
     // use CoerceAndExpand({ptr, ...}) instead of integer coercion.
     // This preserves pointer-type loads/stores through SelectionDAGBuilder so that
