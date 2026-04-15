@@ -217,8 +217,10 @@ private:
   bool coalesceStackAccess(MachineInstr *MI, Register Reg);
   bool foldMemoryOperand(ArrayRef<std::pair<MachineInstr *, unsigned>>,
                          MachineInstr *LoadMI = nullptr);
-  void insertReload(Register VReg, SlotIndex, MachineBasicBlock::iterator MI);
-  void insertSpill(Register VReg, bool isKill, MachineBasicBlock::iterator MI);
+  void insertReload(Register VReg, Register OrigVReg, SlotIndex,
+                    MachineBasicBlock::iterator MI);
+  void insertSpill(Register VReg, Register OrigVReg, bool isKill,
+                   MachineBasicBlock::iterator MI);
 
   void spillAroundUses(Register Reg);
   void spillAll();
@@ -473,7 +475,7 @@ bool InlineSpiller::hoistSpillInsideBB(LiveInterval &SpillLI,
   MachineInstrSpan MIS(MII, MBB);
   // Insert spill without kill flag immediately after def.
   TII.storeRegToStackSlot(*MBB, MII, SrcReg, false, StackSlot,
-                          MRI.getRegClass(SrcReg), Register());
+                          MRI.getRegClass(SrcReg), SrcReg);
   LIS.InsertMachineInstrRangeInMaps(MIS.begin(), MII);
   for (const MachineInstr &MI : make_range(MIS.begin(), MII))
     getVDefInterval(MI, LIS);
@@ -1112,14 +1114,14 @@ foldMemoryOperand(ArrayRef<std::pair<MachineInstr *, unsigned>> Ops,
   return true;
 }
 
-void InlineSpiller::insertReload(Register NewVReg,
+void InlineSpiller::insertReload(Register NewVReg, Register OrigVReg,
                                  SlotIndex Idx,
                                  MachineBasicBlock::iterator MI) {
   MachineBasicBlock &MBB = *MI->getParent();
 
   MachineInstrSpan MIS(MI, &MBB);
   TII.loadRegFromStackSlot(MBB, MI, NewVReg, StackSlot,
-                           MRI.getRegClass(NewVReg), Register());
+                           MRI.getRegClass(NewVReg), OrigVReg);
 
   LIS.InsertMachineInstrRangeInMaps(MIS.begin(), MI);
 
@@ -1142,7 +1144,8 @@ static bool isRealSpill(const MachineInstr &Def) {
 }
 
 /// insertSpill - Insert a spill of NewVReg after MI.
-void InlineSpiller::insertSpill(Register NewVReg, bool isKill,
+void InlineSpiller::insertSpill(Register NewVReg, Register OrigVReg,
+                                 bool isKill,
                                  MachineBasicBlock::iterator MI) {
   // Spill are not terminators, so inserting spills after terminators will
   // violate invariants in MachineVerifier.
@@ -1155,7 +1158,7 @@ void InlineSpiller::insertSpill(Register NewVReg, bool isKill,
 
   if (IsRealSpill)
     TII.storeRegToStackSlot(MBB, SpillBefore, NewVReg, isKill, StackSlot,
-                            MRI.getRegClass(NewVReg), Register());
+                            MRI.getRegClass(NewVReg), OrigVReg);
   else
     // Don't spill undef value.
     // Anything works for undef, in particular keeping the memory
@@ -1251,7 +1254,7 @@ void InlineSpiller::spillAroundUses(Register Reg) {
     Register NewVReg = Edit->createFrom(Reg);
 
     if (RI.Reads)
-      insertReload(NewVReg, Idx, &MI);
+      insertReload(NewVReg, Reg, Idx, &MI);
 
     // Rewrite instruction operands.
     bool hasLiveDef = false;
@@ -1271,7 +1274,7 @@ void InlineSpiller::spillAroundUses(Register Reg) {
     // FIXME: Use a second vreg if instruction has no tied ops.
     if (RI.Writes)
       if (hasLiveDef)
-        insertSpill(NewVReg, true, &MI);
+        insertSpill(NewVReg, Reg, true, &MI);
   }
 }
 

@@ -661,11 +661,14 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
       Opcode = RISCV::SS_ID;
     } else if (useSigModeDataSpillOpcode(*MF, VReg)) {
       Opcode = RISCV::SD;
-      LLVM_DEBUG(dbgs() << "SigMode spill: choose SD for data reg "
+      dbgs() << "SigMode spill: choose SD for data reg "
                         << printReg(VReg) << " in "
-                        << MF->getName() << "\n");
+                        << MF->getName() << "\n";
     } else {
       Opcode = RISCV::SS;
+      dbgs() << "SigMode spill: choose SS for data reg "
+                        << printReg(VReg) << " in "
+                        << MF->getName() << "\n";
     }
   } else if (RISCV::GPRF16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::SH_INX;
@@ -762,11 +765,14 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
       Opcode = RISCV::LS_MAP;
     } else if (useSigModeDataSpillOpcode(*MF, VReg)) {
       Opcode = RISCV::LD;
-      LLVM_DEBUG(dbgs() << "SigMode reload: choose LD for data reg "
+      dbgs() << "SigMode reload: choose LD for data reg "
                         << printReg(VReg) << " in "
-                        << MF->getName() << "\n");
+                        << MF->getName() << "\n";
     } else {
       Opcode = RISCV::LS;
+      dbgs() << "SigMode reload: choose LS for data reg "
+                        << printReg(VReg) << " in "
+                        << MF->getName() << "\n";
     }
   } else if (RISCV::GPRF16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::LH_INX;
