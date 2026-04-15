@@ -14,6 +14,7 @@
 #define LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
 
 #include "RISCVSubtarget.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -75,6 +76,10 @@ private:
 
   /// Registers that have been sign extended from i32.
   SmallVector<Register, 8> SExt32Registers;
+
+  /// Virtual registers known to carry plain data values, so SigMode spills can
+  /// use ordinary LD/SD instead of LS/SS.
+  BitVector DataValueRegs;
 
   /// Size of stack frame for Zcmp PUSH/POP
   unsigned RVPushStackSize = 0;
@@ -226,6 +231,26 @@ public:
 
   void addSExt32Register(Register Reg);
   bool isSExt32Register(Register Reg) const;
+
+  void clearDataValueRegs() { DataValueRegs.reset(); }
+
+  bool markDataValueReg(Register Reg) {
+    if (!Reg.isVirtual())
+      return false;
+    unsigned Index = Reg.virtRegIndex();
+    if (Index >= DataValueRegs.size())
+      DataValueRegs.resize(Index + 1);
+    bool Changed = !DataValueRegs.test(Index);
+    DataValueRegs.set(Index);
+    return Changed;
+  }
+
+  bool isDataValueReg(Register Reg) const {
+    if (!Reg.isVirtual())
+      return false;
+    unsigned Index = Reg.virtRegIndex();
+    return Index < DataValueRegs.size() && DataValueRegs.test(Index);
+  }
 
   bool isVectorCall() const { return IsVectorCall; }
   void setIsVectorCall() { IsVectorCall = true; }

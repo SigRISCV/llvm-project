@@ -66,6 +66,12 @@ static cl::opt<MachineTraceStrategy> ForceMachineCombinerStrategy(
                clEnumValN(MachineTraceStrategy::TS_MinInstrCount, "min-instr",
                           "MinInstrCount strategy.")));
 
+static bool useSigModeDataSpillOpcode(const MachineFunction &MF,
+                                      Register VReg) {
+  const auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
+  return RVFI && RVFI->isDataValueReg(VReg);
+}
+
 namespace llvm::RISCVVPseudosTable {
 
 using namespace RISCV;
@@ -653,6 +659,11 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
       Opcode = RISCV::SD;
     } else if (Flags & MachineInstr::FrameSetup_EncMap) {
       Opcode = RISCV::SS_ID;
+    } else if (useSigModeDataSpillOpcode(*MF, VReg)) {
+      Opcode = RISCV::SD;
+      LLVM_DEBUG(dbgs() << "SigMode spill: choose SD for data reg "
+                        << printReg(VReg) << " in "
+                        << MF->getName() << "\n");
     } else {
       Opcode = RISCV::SS;
     }
@@ -749,6 +760,11 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
       Opcode = RISCV::LD;
     } else if (Flags & MachineInstr::FrameDestroy_EncMap) {
       Opcode = RISCV::LS_MAP;
+    } else if (useSigModeDataSpillOpcode(*MF, VReg)) {
+      Opcode = RISCV::LD;
+      LLVM_DEBUG(dbgs() << "SigMode reload: choose LD for data reg "
+                        << printReg(VReg) << " in "
+                        << MF->getName() << "\n");
     } else {
       Opcode = RISCV::LS;
     }
