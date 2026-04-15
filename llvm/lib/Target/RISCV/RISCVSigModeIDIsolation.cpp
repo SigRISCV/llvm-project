@@ -143,7 +143,7 @@ bool RISCVSigModeIDIsolation::runOnFunction(Function &F, Module &M) {
   bool Changed = false;
 
   // Get the setnewid intrinsic
-  Function *SetNewIDFn = Intrinsic::getOrInsertDeclaration(
+  Function *SetDummyIDFn = Intrinsic::getOrInsertDeclaration(
       &M, Intrinsic::riscv_xsig_setdummyid);
   LLVMContext &Ctx = M.getContext();
   
@@ -152,9 +152,9 @@ bool RISCVSigModeIDIsolation::runOnFunction(Function &F, Module &M) {
   Type *I64Ty = Type::getInt64Ty(Ctx);
   
   // 1. Replace null pointers
-  Changed |= replaceNullPointers(F, SetNewIDFn, PtrTy, I64Ty);
+  Changed |= replaceNullPointers(F, SetDummyIDFn, PtrTy, I64Ty);
 
-  SetNewIDFn = Intrinsic::getOrInsertDeclaration(
+  Function *SetNewIDFn = Intrinsic::getOrInsertDeclaration(
       &M, Intrinsic::riscv_xsig_setnewid);
   
   Changed |= processHeapAllocators(F, SetNewIDFn, PtrTy);
@@ -194,37 +194,52 @@ bool RISCVSigModeIDIsolation::processHeapAllocators(Function &F, Function *SetNe
         }
         if (is_heap_allocator) {
           LLVM_DEBUG(dbgs() << "Processing heap allocator call: " << *Call << "\n");
-          
-          IRBuilder<> Builder(Call->getNextNode());
-          Builder.SetCurrentDebugLocation(Call->getDebugLoc());
-          
-          Value *AllocPtr = Call;
-          int user_num = 0;
-          for(auto user : Call->users()) {
-            user_num++;
+
+          SmallVector<User *, 4> AllocUsers;
+          AddrSpaceCastInst *MatchedASC = nullptr;
+          int addrspace_num = 0;
+          for (User *U : Call->users()) {
+            AllocUsers.push_back(U);
+            auto *ASC = dyn_cast<AddrSpaceCastInst>(U);
+            if (!ASC)
+              continue;
+            addrspace_num ++;
+            assert(addrspace_num <= 1 &&
+                   "heap allocator has multiple addrspacecast users");
+            if (ASC->getSrcAddressSpace() != 100 || ASC->getDestAddressSpace() != 0)
+              continue;
+            MatchedASC = ASC;
           }
-          if (user_num != 1) {
-            LLVM_DEBUG(dbgs() << "  Skipping allocator with multiple users\n");
-            continue;
-          }
-          User* alloctor_user = *(Call->users().begin());
-          if (!isa<AddrSpaceCastInst>(alloctor_user)) {
-            LLVM_DEBUG(dbgs() << "  Skipping allocator without addrspacecast user\n");
-            continue;
-          }
-          AddrSpaceCastInst* ASC = cast<AddrSpaceCastInst>(alloctor_user);
-          if (ASC->getSrcAddressSpace() != 100 || ASC->getDestAddressSpace() != 0) {
+
+          if (!MatchedASC) {
             LLVM_DEBUG(dbgs() << "  Skipping allocator without AS100 to AS0 cast\n");
             continue;
           }
-          Value* NewASC = Builder.CreateAddrSpaceCast(AllocPtr, PtrTy);
-          Value *NewPtr = Builder.CreateCall(SetNewIDFn, {NewASC});
-          ASC->replaceAllUsesWith(NewPtr);
-          ASC->eraseFromParent();
+
+          IRBuilder<> Builder(MatchedASC->getNextNode());
+          Builder.SetCurrentDebugLocation(MatchedASC->getDebugLoc());
+
+          Value *NewPtr = Builder.CreateCall(SetNewIDFn, {MatchedASC});
+          Value *NewPtrAS100 = Builder.CreateAddrSpaceCast(NewPtr, Call->getType());
+
+          SmallVector<User *, 8> ASCUsers(MatchedASC->users());
+          for (User *U : ASCUsers)
+            if (U != NewPtr && U != NewPtrAS100)
+              U->replaceUsesOfWith(MatchedASC, NewPtr);
+
+          for (User *U : AllocUsers) {
+            if (U == MatchedASC || U == NewPtr || U == NewPtrAS100)
+              continue;
+            U->replaceUsesOfWith(Call, NewPtrAS100);
+          }
+
+          if (MatchedASC->use_empty())
+            MatchedASC->eraseFromParent();
+
           Changed = true;
           NumAllocasProcessed++;
-          
-          LLVM_DEBUG(dbgs() << "Replaced allocator call result with setnewid: " 
+
+          LLVM_DEBUG(dbgs() << "Replaced allocator call result with setnewid: "
                             << *NewPtr << "\n");
         }
       }
@@ -235,7 +250,7 @@ bool RISCVSigModeIDIsolation::processHeapAllocators(Function &F, Function *SetNe
 }
 
 bool RISCVSigModeIDIsolation::replaceNullPointers(Function &F, 
-                                                   Function *SetNewIDFn,
+                                                   Function *SetDummyIDFn,
                                                    Type *PtrTy, Type *I64Ty) {
   bool Changed = false;
   
@@ -271,7 +286,7 @@ bool RISCVSigModeIDIsolation::replaceNullPointers(Function &F,
     IRBuilder<> Builder(Inst);
     
     // Create: %newptr = call ptr @llvm.riscv.xsig.setdummyid(ptr %tmp)
-    Value *NewPtr = Builder.CreateCall(SetNewIDFn, {NullPtr});
+    Value *NewPtr = Builder.CreateCall(SetDummyIDFn, {NullPtr});
     
     // If original type was different pointer type (e.g., different address space),
     // cast back to the original type
