@@ -269,21 +269,28 @@ void RISCVSigMemcpyExpand::runTypeRecovery(SmallVector<Function*, 0> FunctionsTo
 /// 2. If ptr comes from other addrspacecast: use the source AS
 /// 3. Otherwise, use the direct AS
 static Value* getRealPtr(Value *Ptr) {
-  // Look for addrspacecast
-  if (auto *ASC = dyn_cast<AddrSpaceCastInst>(Ptr)) {
-    // Check if this is an alloca-generated cast (marked with .ascast_alloca suffix)
-    // Pattern: alloca -> addrspacecast with name ".ascast_alloca"
-    // This means the real storage is in AS0 (alloca space)
-    if (ASC->hasName() && ASC->getName().contains(".ascast_alloca")) {
-      // alloca cast to AS100 - real AS is AS100
-      return Ptr;
+  // Look through addrspacecast wrappers to recover the underlying pointer.
+  // This handles both instruction-form casts and constant-expression/operator
+  // casts such as: addrspacecast (ptr @net to ptr addrspace(100)).
+  while (true) {
+    if (auto *ASC = dyn_cast<AddrSpaceCastInst>(Ptr)) {
+      // Check if this is an alloca-generated cast (marked with
+      // .ascast_alloca suffix). In that case, keep the AS100 pointer.
+      if (ASC->hasName() && ASC->getName().contains(".ascast_alloca"))
+        return Ptr;
+      Ptr = ASC->getOperand(0);
+      continue;
     }
-    
-    // For other addrspacecasts, use source AS
-    return ASC->getOperand(0);
+
+    if (auto *ASC = dyn_cast<AddrSpaceCastOperator>(Ptr)) {
+      Ptr = ASC->getOperand(0);
+      continue;
+    }
+
+    break;
   }
-  
-  // No cast, use direct AS
+
+  // No addrspacecast wrapper left, use the direct pointer.
   return Ptr;
 }
 
@@ -1397,7 +1404,8 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
   Dest = getRealPtr(Dest);
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
 
-  LLVM_DEBUG(dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n");
+  dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n";
+  dbgs() << *II << "\n";
   
   bool HasPointers = false;
   Type* ElemTy = nullptr;
