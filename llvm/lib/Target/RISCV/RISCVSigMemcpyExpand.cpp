@@ -1404,8 +1404,7 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
   Dest = getRealPtr(Dest);
   unsigned DestAS = Dest->getType()->getPointerAddressSpace();
 
-  dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n";
-  dbgs() << *II << "\n";
+  LLVM_DEBUG(dbgs() << "Expanding sigmemset: dest AS=" << DestAS << "\n");
   
   bool HasPointers = false;
   Type* ElemTy = nullptr;
