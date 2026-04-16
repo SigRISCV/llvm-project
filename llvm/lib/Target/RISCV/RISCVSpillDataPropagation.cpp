@@ -125,6 +125,41 @@ private:
     case RISCV::LWU:
     case RISCV::LD:
     case RISCV::PseudoMovImm:
+    case RISCV::SLL:
+    case RISCV::SLLI:
+    case RISCV::SLLW:
+    case RISCV::SLLIW:
+    case RISCV::SRL:
+    case RISCV::SRLI:
+    case RISCV::SRLW:
+    case RISCV::SRLIW:
+    case RISCV::SRA:
+    case RISCV::SRAI:
+    case RISCV::SRAW:
+    case RISCV::SRAIW:
+    case RISCV::AND:
+    case RISCV::ANDI:
+    case RISCV::OR:
+    case RISCV::ORI:
+    case RISCV::XOR:
+    case RISCV::XORI:
+    case RISCV::ADDW:
+    case RISCV::ADDIW:
+    case RISCV::SUBW:
+    case RISCV::SLTU:
+    case RISCV::SLTIU:
+    case RISCV::MUL:
+    case RISCV::MULH:
+    case RISCV::MULHSU:
+    case RISCV::MULHU:
+    case RISCV::DIV:
+    case RISCV::DIVU:
+    case RISCV::DIVW:
+    case RISCV::DIVUW:
+    case RISCV::REM:
+    case RISCV::REMU:
+    case RISCV::REMW:
+    case RISCV::REMUW:
       return true;
     default:
       return false;
@@ -198,7 +233,8 @@ bool RISCVSpillDataPropagation::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
-  LLVM_DEBUG(dumpSpillDataAnnotations(MF, *RVFI));
+  // dumpSpillDataAnnotations(MF, *RVFI);
+  dumpSpillDataAnnotations(MF, *RVFI);
   return false;
 }
 
