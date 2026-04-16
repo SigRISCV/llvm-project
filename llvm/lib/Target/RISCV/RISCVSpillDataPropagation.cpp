@@ -234,7 +234,7 @@ bool RISCVSpillDataPropagation::runOnMachineFunction(MachineFunction &MF) {
   }
 
   // dumpSpillDataAnnotations(MF, *RVFI);
-  dumpSpillDataAnnotations(MF, *RVFI);
+  LLVM_DEBUG(dumpSpillDataAnnotations(MF, *RVFI));
   return false;
 }
 
