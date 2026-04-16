@@ -797,8 +797,15 @@ MachineInstr *TargetInstrInfo::foldMemoryOperand(MachineInstr &MI,
       storeRegToStackSlot(*MBB, Pos, MO.getReg(), MO.isKill(), FI, RC,
                           Register());
     }
-  } else
-    loadRegFromStackSlot(*MBB, Pos, MO.getReg(), FI, RC, Register());
+  } else {
+    Register SpillVReg;
+    if (MO.isReg() && MO.getReg().isPhysical()) {
+      const MachineOperand &OtherMO = MI.getOperand(Ops[0]);
+      if (OtherMO.isReg() && OtherMO.getReg().isVirtual())
+        SpillVReg = OtherMO.getReg();
+    }
+    loadRegFromStackSlot(*MBB, Pos, MO.getReg(), FI, RC, SpillVReg);
+  }
 
   return &*--Pos;
 }
