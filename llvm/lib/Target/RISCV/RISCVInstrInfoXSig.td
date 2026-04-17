@@ -121,6 +121,9 @@ let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 0,
 def PseudoLSGA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                        "lsga", "$dst, $src">;
 
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 1 in
+def PseudoLSA_TLS_IE : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), []>;
+
 // Define Pat
 def : Pat<(xsig_setnewid GPR:$rs1), (SETNEWID GPR:$rs1, 0)>;
 def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (SETNEWID GPR:$rs1, simm12_lo:$imm12)>;

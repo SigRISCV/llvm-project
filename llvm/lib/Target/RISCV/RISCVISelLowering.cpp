@@ -9266,12 +9266,15 @@ SDValue RISCVTargetLowering::getStaticTLSAddr(GlobalAddressSDNode *N,
 
   if (UseGOT) {
     // Use PC-relative addressing to access the GOT for this TLS symbol, then
-    // load the address from the GOT and add the thread pointer. This generates
-    // the pattern (PseudoLA_TLS_IE sym), which expands to
-    // (ld (auipc %tls_ie_pcrel_hi(sym)) %pcrel_lo(auipc)).
+    // load the address from the GOT and add the thread pointer. In sig mode,
+    // pointer-valued non-raw TLS globals use a sig load for the GOT entry so
+    // the sequence becomes PseudoLA_TLS_IE_S instead of PseudoLA_TLS_IE.
     SDValue Addr = DAG.getTargetGlobalAddress(GV, DL, Ty, 0, 0);
+    unsigned Opcode = RISCV::PseudoLA_TLS_IE;
+    if (Subtarget.isSigModeSupport())
+      Opcode = RISCV::PseudoLSA_TLS_IE;
     SDValue Load =
-        SDValue(DAG.getMachineNode(RISCV::PseudoLA_TLS_IE, DL, Ty, Addr), 0);
+        SDValue(DAG.getMachineNode(Opcode, DL, Ty, Addr), 0);
     MachineFunction &MF = DAG.getMachineFunction();
     MachineMemOperand *MemOp = MF.getMachineMemOperand(
         MachinePointerInfo::getGOT(MF),
