@@ -143,9 +143,6 @@ private:
     case RISCV::ORI:
     case RISCV::XOR:
     case RISCV::XORI:
-    case RISCV::ADDW:
-    case RISCV::ADDIW:
-    case RISCV::SUBW:
     case RISCV::SLTU:
     case RISCV::SLTIU:
     case RISCV::MUL:
