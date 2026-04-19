@@ -662,8 +662,11 @@ int TypeRecovery::initialize(SmallVector<Function*, 0> FunctionsToProcess) {
             std::string TypeStr = getLLVMTypeString(OutputTy);
             
             MDNode *BasicMD = lookupTypeByString(TypeStr);
-            assert(BasicMD && "Failed to find basic type metadata");
-            addTypeInitStage(&I, BasicMD);
+            if (!BasicMD) {
+              addTypeInitStage(&I, nullptr);
+            } else {
+              addTypeInitStage(&I, BasicMD);
+            }
           } else {
             addTypeInitStage(&I, nullptr); // Non-pointer/non-primitive types
           }

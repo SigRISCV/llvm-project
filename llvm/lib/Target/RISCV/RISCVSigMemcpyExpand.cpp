@@ -447,6 +447,12 @@ Type *RISCVSigMemcpyExpand::selectUsedType(Value* I, const TypeRecovery::TypeSet
   std::string SrcLoc = TypeRecovery::getSourceLocation(I);
   std::string LocStr = SrcLoc.empty() ? "" : " at " + SrcLoc;
 
+  if (!DestTypes) {
+    LLVM_DEBUG(dbgs() << "Memcpy Expand Warning: No type metadata for " << FuncName << LocStr << "\n");
+    errs() << "Memcpy Expand Warning: No type metadata for " << FuncName << LocStr << "\n";
+    return nullptr;
+  }
+
   LLVM_DEBUG(dbgs() << "Dest Types for " << FuncName << " " << LocStr << ":\n");
   for (MDNode *MD : *DestTypes) {
     LLVM_DEBUG(dbgs() << "  - " << TR->getTypeString(MD) << "\n");
