@@ -7585,10 +7585,10 @@ SDValue RISCVTargetLowering::LowerAddrSpaceCast(SDValue Op,
         DL, Op.getValueType(), Src);
   }
 
-  if (SrcAS == 100 && DstAS == 0) {
-    return DAG.getNode(RISCVISD::XSIG_SETDUMMYID,
-        DL, Op.getValueType(), Src);
-  }
+  // if (SrcAS == 100 && DstAS == 0) {
+  //   return DAG.getNode(RISCVISD::XSIG_SETDUMMYID,
+  //       DL, Op.getValueType(), Src);
+  // }
   
   return Src;
 }
