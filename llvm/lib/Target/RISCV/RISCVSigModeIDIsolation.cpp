@@ -152,7 +152,7 @@ bool RISCVSigModeIDIsolation::runOnFunction(Function &F, Module &M) {
   Type *I64Ty = Type::getInt64Ty(Ctx);
   
   // 1. Replace null pointers
-  Changed |= replaceNullPointers(F, SetDummyIDFn, PtrTy, I64Ty);
+  // Changed |= replaceNullPointers(F, SetDummyIDFn, PtrTy, I64Ty);
 
   Function *SetNewIDFn = Intrinsic::getOrInsertDeclaration(
       &M, Intrinsic::riscv_xsig_setnewid);
