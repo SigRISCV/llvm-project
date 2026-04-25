@@ -123,7 +123,7 @@ private:
     case RISCV::LHU:
     case RISCV::LW:
     case RISCV::LWU:
-    case RISCV::LD:
+    // case RISCV::LD:
     case RISCV::PseudoMovImm:
     case RISCV::SLL:
     case RISCV::SLLI:
