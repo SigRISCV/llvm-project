@@ -8637,12 +8637,12 @@ static SDValue getMemcpyLoadsAndStores(
     if (FrameIdx != INT_MIN && !MFI.isFixedObjectIndex(FrameIdx))
       DstAlignCanChange = true;
   }
-  if (MaybeAlign DstAlign = DAG.InferPtrAlign(Dst))
-    Alignment = std::max(Alignment, *DstAlign);
   MaybeAlign SrcAlign = DAG.InferPtrAlign(Src);
   if (!SrcAlign || Alignment > *SrcAlign)
     SrcAlign = Alignment;
   assert(SrcAlign && "SrcAlign must be set");
+  if (MaybeAlign DstAlign = DAG.InferPtrAlign(Dst))
+    Alignment = std::max(Alignment, *DstAlign);
   ConstantDataArraySlice Slice;
   // If marked as volatile, perform a copy even when marked as constant.
   bool CopyFromConstant = !isVol && isMemSrcFromConstant(Src, Slice);
