@@ -1167,11 +1167,12 @@ void RISCVSigMemcpyExpand::generateMemsetFuncBody(Function *F, Type *ElemTy,
   
   // Pre-compute xsig_setdummyid(null) once at function entry
   Type *DefaultPtrTy = PointerType::get(*Ctx, 0);
-  Value *NullPtr = ConstantPointerNull::get(cast<PointerType>(DefaultPtrTy));
-  FunctionType *SetDummyIdTy = FunctionType::get(DefaultPtrTy, {DefaultPtrTy}, false);
-  FunctionCallee SetDummyIdFn = Mod->getOrInsertFunction(
-      "llvm.riscv.xsig.setdummyid", SetDummyIdTy);
-  Value *DummyNull = Builder.CreateCall(SetDummyIdFn, {NullPtr}, "dummy.null");
+  // Value *NullPtr = ConstantPointerNull::get(cast<PointerType>(DefaultPtrTy));
+  // FunctionType *SetDummyIdTy = FunctionType::get(DefaultPtrTy, {DefaultPtrTy}, false);
+  // FunctionCallee SetDummyIdFn = Mod->getOrInsertFunction(
+  //     "llvm.riscv.xsig.setdummyid", SetDummyIdTy);
+  // Value *DummyNull = Builder.CreateCall(SetDummyIdFn, {NullPtr}, "dummy.null");
+  Value *DummyNull = ConstantPointerNull::get(cast<PointerType>(DefaultPtrTy));
   
   // Entry: check if len > 0, if not, skip to exit
   BasicBlock *ExitBB = BasicBlock::Create(*Ctx, "exit", F);
@@ -1448,11 +1449,11 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
       
       // Pre-compute xsig_setdummyid(null) for pointer fields
       Type *DefaultPtrTy = PointerType::get(*Ctx, 0);
-      Value *NullPtr = ConstantPointerNull::get(cast<PointerType>(DefaultPtrTy));
-      FunctionType *SetDummyIdTy = FunctionType::get(DefaultPtrTy, {DefaultPtrTy}, false);
-      FunctionCallee SetDummyIdFn = Mod->getOrInsertFunction(
-          "llvm.riscv.xsig.setdummyid", SetDummyIdTy);
-      Value *DummyNull = Builder.CreateCall(SetDummyIdFn, {NullPtr}, "dummy.null");
+      // Value *NullPtr = ConstantPointerNull::get(cast<PointerType>(DefaultPtrTy));
+      // FunctionType *SetDummyIdTy = FunctionType::get(DefaultPtrTy, {DefaultPtrTy}, false);
+      // FunctionCallee SetDummyIdFn = Mod->getOrInsertFunction(
+      //     "llvm.riscv.xsig.setdummyid", SetDummyIdTy);
+      Value *DummyNull = ConstantPointerNull::get(cast<PointerType>(DefaultPtrTy));
       
       generateBlockZero(Builder, Dest, ElemTy, NumElems, DestAS, DummyNull);
     } else {
