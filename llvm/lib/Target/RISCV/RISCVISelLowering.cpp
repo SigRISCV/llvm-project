@@ -9144,11 +9144,11 @@ SDValue RISCVTargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
   // mode.
   if (isPositionIndependent() || Subtarget.allowTaggedGlobals() || UseSigMode) {
     SDValue Addr = getTargetNode(N, DL, Ty, DAG, 0);
-    if (IsLocal && !Subtarget.allowTaggedGlobals() && !UseSigMode)
+    // if (IsLocal && !Subtarget.allowTaggedGlobals() && !UseSigMode)
       // Use PC-relative addressing to access the symbol. This generates the
       // pattern (PseudoLLA sym), which expands to (addi (auipc %pcrel_hi(sym))
       // %pcrel_lo(auipc)).
-      return DAG.getNode(RISCVISD::LLA, DL, Ty, Addr);
+      // return DAG.getNode(RISCVISD::LLA, DL, Ty, Addr);
 
     // Use PC-relative addressing to access the GOT for this symbol, then load
     // the address from the GOT. This generates the pattern (PseudoLGA sym),
