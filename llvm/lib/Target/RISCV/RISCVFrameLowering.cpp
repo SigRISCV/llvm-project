@@ -551,7 +551,7 @@ uint64_t RISCVFrameLowering::getStackSizeWithRVVPadding(
 
 static SmallVector<CalleeSavedInfo, 8>
 getUnmanagedCSI(const MachineFunction &MF,
-                const std::vector<CalleeSavedInfo> &CSI) {
+                ArrayRef<CalleeSavedInfo> CSI) {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   SmallVector<CalleeSavedInfo, 8> NonLibcallCSI;
 
@@ -565,8 +565,28 @@ getUnmanagedCSI(const MachineFunction &MF,
 }
 
 static SmallVector<CalleeSavedInfo, 8>
+getUnmanagedGPRCSI(const MachineFunction &MF,
+                   ArrayRef<CalleeSavedInfo> CSI) {
+  SmallVector<CalleeSavedInfo, 8> GPRCSI;
+  for (const auto &CS : getUnmanagedCSI(MF, CSI))
+    if (RISCV::GPRRegClass.contains(CS.getReg()))
+      GPRCSI.push_back(CS);
+  return GPRCSI;
+}
+
+static SmallVector<CalleeSavedInfo, 8>
+getUnmanagedNonGPRCSI(const MachineFunction &MF,
+                      ArrayRef<CalleeSavedInfo> CSI) {
+  SmallVector<CalleeSavedInfo, 8> NonGPRCSI;
+  for (const auto &CS : getUnmanagedCSI(MF, CSI))
+    if (!RISCV::GPRRegClass.contains(CS.getReg()))
+      NonGPRCSI.push_back(CS);
+  return NonGPRCSI;
+}
+
+static SmallVector<CalleeSavedInfo, 8>
 getRVVCalleeSavedInfo(const MachineFunction &MF,
-                      const std::vector<CalleeSavedInfo> &CSI) {
+                      ArrayRef<CalleeSavedInfo> CSI) {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   SmallVector<CalleeSavedInfo, 8> RVVCSI;
 
@@ -581,7 +601,7 @@ getRVVCalleeSavedInfo(const MachineFunction &MF,
 
 static SmallVector<CalleeSavedInfo, 8>
 getPushOrLibCallsSavedInfo(const MachineFunction &MF,
-                           const std::vector<CalleeSavedInfo> &CSI) {
+                           ArrayRef<CalleeSavedInfo> CSI) {
   auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
 
   SmallVector<CalleeSavedInfo, 8> PushOrLibCallsCSI;
@@ -608,7 +628,7 @@ getPushOrLibCallsSavedInfo(const MachineFunction &MF,
 
 static SmallVector<CalleeSavedInfo, 8>
 getQCISavedInfo(const MachineFunction &MF,
-                const std::vector<CalleeSavedInfo> &CSI) {
+                ArrayRef<CalleeSavedInfo> CSI) {
   auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
 
   SmallVector<CalleeSavedInfo, 8> QCIInterruptCSI;
@@ -622,6 +642,57 @@ getQCISavedInfo(const MachineFunction &MF,
   }
 
   return QCIInterruptCSI;
+}
+
+static bool getXSigCalleeSaveSeq(const MachineFunction &MF,
+                                 ArrayRef<CalleeSavedInfo> CSI, unsigned &Seq) {
+  auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
+  if (!MF.getSubtarget<RISCVSubtarget>().isSigModeSupport() ||
+      !RVFI->hasEncMapFrameIndex() || RVFI->useQCIInterrupt(MF) ||
+      RVFI->isPushable(MF) || RVFI->useSaveRestoreLibCalls(MF))
+    return false;
+
+  const auto UnmanagedGPRCSI = getUnmanagedGPRCSI(MF, CSI);
+  if (UnmanagedGPRCSI.empty() || !getRVVCalleeSavedInfo(MF, CSI).empty())
+    return false;
+
+  bool HasRA = false;
+  unsigned SCount = 0;
+  unsigned Index = 0;
+  if (UnmanagedGPRCSI[Index].getReg() == RAReg) {
+    HasRA = true;
+    ++Index;
+  }
+
+  for (; Index < UnmanagedGPRCSI.size(); ++Index, ++SCount) {
+    MCRegister Reg = UnmanagedGPRCSI[Index].getReg();
+    if (SCount >= 12 || Reg != FixedCSRFIMap[SCount + 1])
+      return false;
+  }
+
+  Seq = (HasRA ? 0x10u : 0u) | SCount;
+  return Seq != 0;
+}
+
+static unsigned getScalarCalleeSaveRestoreInsnCount(
+    const MachineFunction &MF, ArrayRef<CalleeSavedInfo> CSI) {
+  unsigned Seq = 0;
+  if (getXSigCalleeSaveSeq(MF, CSI, Seq))
+    return 1 + getUnmanagedNonGPRCSI(MF, CSI).size();
+
+  auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
+  return getUnmanagedCSI(MF, CSI).size() + RVFI->hasEncMapFrameIndex();
+}
+
+static void addXSigSeqImplicitRegs(MachineInstrBuilder &MIB, unsigned Seq,
+                                   bool IsRestore) {
+  unsigned State = IsRestore ? RegState::Define : RegState::Implicit;
+  if (Seq & 0x10)
+    MIB.addReg(RAReg, State);
+
+  unsigned SCount = Seq & 0x0f;
+  for (unsigned I = 0; I < SCount; ++I)
+    MIB.addReg(FixedCSRFIMap[I + 1], State);
 }
 
 void RISCVFrameLowering::allocateAndProbeStackForRVV(
@@ -956,7 +1027,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   // FIXME: assumes exactly one instruction is used to restore each
   // callee-saved register.
   MBBI = std::prev(MBBI, getRVVCalleeSavedInfo(MF, CSI).size() +
-                             getUnmanagedCSI(MF, CSI).size() + RVFI->hasEncMapFrameIndex());
+                             getScalarCalleeSaveRestoreInsnCount(MF, CSI));
   CFIInstBuilder CFIBuilder(MBB, MBBI, MachineInstr::FrameSetup);
   bool NeedsDwarfCFI = needsDwarfCFI(MF);
 
@@ -1076,7 +1147,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   // to the stack, not before.
   // FIXME: assumes exactly one instruction is used to save each callee-saved
   // register.
-  std::advance(MBBI, getUnmanagedCSI(MF, CSI).size() + RVFI->hasEncMapFrameIndex());
+  std::advance(MBBI, getScalarCalleeSaveRestoreInsnCount(MF, CSI));
   CFIBuilder.setInsertPoint(MBBI);
 
   // Iterate over list of callee-saved registers and emit .cfi_offset
@@ -1340,8 +1411,8 @@ void RISCVFrameLowering::emitEpilogue(MachineFunction &MF,
   // Skip to after the restores of scalar callee-saved registers
   // FIXME: assumes exactly one instruction is used to restore each
   // callee-saved register.
-  MBBI = std::next(FirstScalarCSRRestoreInsn, getUnmanagedCSI(MF, CSI).size() + 
-                                          RVFI->hasEncMapFrameIndex());
+  MBBI = std::next(FirstScalarCSRRestoreInsn,
+                   getScalarCalleeSaveRestoreInsnCount(MF, CSI));
   CFIBuilder.setInsertPoint(MBBI);
 
   if (getLibCallID(MF, CSI) != -1) {
@@ -2286,10 +2357,13 @@ bool RISCVFrameLowering::spillCalleeSavedRegisters(
   }
 
   // Manually spill values not spilled by libcall & Push/Pop.
-  const auto &UnmanagedCSI = getUnmanagedCSI(*MF, CSI);
+  const auto &UnmanagedGPRCSI = getUnmanagedGPRCSI(*MF, CSI);
+  const auto &UnmanagedNonGPRCSI = getUnmanagedNonGPRCSI(*MF, CSI);
   const auto &RVVCSI = getRVVCalleeSavedInfo(*MF, CSI);
+  unsigned XSigSeq = 0;
+  bool UseXSigCalleeSave = getXSigCalleeSaveSeq(*MF, CSI, XSigSeq);
 
-  auto storeRegsToStackSlots = [&](decltype(UnmanagedCSI) CSInfo) {
+  auto storeRegsToStackSlots = [&](const auto &CSInfo) {
     for (auto &CS : CSInfo) {
       // Insert the spill to the stack frame.
       MachineInstr::MIFlag FrameSetupFlag =
@@ -2301,11 +2375,24 @@ bool RISCVFrameLowering::spillCalleeSavedRegisters(
                               FrameSetupFlag);
     }
   };
-  storeRegsToStackSlots(UnmanagedCSI);
+
+  if (UseXSigCalleeSave) {
+    int EncMapFI = RVFI->getEncMapFrameIndex();
+    MachineInstrBuilder MIB =
+        BuildMI(MBB, MI, DL, TII.get(RISCV::CALLEESAVE))
+            .addImm(XSigSeq)
+            .addFrameIndex(EncMapFI)
+            .addImm(0)
+            .setMIFlag(MachineInstr::FrameSetup);
+    addXSigSeqImplicitRegs(MIB, XSigSeq, /*IsRestore=*/false);
+  } else {
+    storeRegsToStackSlots(UnmanagedGPRCSI);
+  }
+  storeRegsToStackSlots(UnmanagedNonGPRCSI);
   storeRegsToStackSlots(RVVCSI);
 
   // SigMode: Store zero to the zero slot in prologue for raw functions
-  if (RVFI->hasEncMapFrameIndex()) {
+  if (RVFI->hasEncMapFrameIndex() && !UseXSigCalleeSave) {
     int EncMapFI = RVFI->getEncMapFrameIndex();
     // Store X0 (zero) to the zero slot using SD/SS instruction
     TII.storeRegToStackSlot(MBB, MI, RISCV::X0, true, EncMapFI,
@@ -2390,10 +2477,13 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
   // loading RA and return by RA.  loadRegFromStackSlot can insert
   // multiple instructions.
   RISCVMachineFunctionInfo *RVFI = MF->getInfo<RISCVMachineFunctionInfo>();
+  std::vector<CalleeSavedInfo> CSIVec(CSI.begin(), CSI.end());
+  unsigned XSigSeq = 0;
+  bool UseXSigCalleeSave = getXSigCalleeSaveSeq(*MF, CSIVec, XSigSeq);
 
   // SigMode: Load from zero slot in epilogue for raw functions
   // This reads back the stored zero value (triggers LS instruction)
-  if (RVFI->hasEncMapFrameIndex()) {
+  if (RVFI->hasEncMapFrameIndex() && !UseXSigCalleeSave) {
     int ZeroFI = RVFI->getEncMapFrameIndex();
     // Load into X0 from the zero slot - the value is discarded but
     // this generates the LS instruction we need
@@ -2402,10 +2492,11 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
                              MachineInstr::FrameDestroy_EncMap);
   }
 
-  const auto &UnmanagedCSI = getUnmanagedCSI(*MF, CSI);
-  const auto &RVVCSI = getRVVCalleeSavedInfo(*MF, CSI);
+  const auto &UnmanagedGPRCSI = getUnmanagedGPRCSI(*MF, CSIVec);
+  const auto &UnmanagedNonGPRCSI = getUnmanagedNonGPRCSI(*MF, CSIVec);
+  const auto &RVVCSI = getRVVCalleeSavedInfo(*MF, CSIVec);
 
-  auto loadRegFromStackSlot = [&](decltype(UnmanagedCSI) CSInfo) {
+  auto loadRegFromStackSlot = [&](const auto &CSInfo) {
     for (auto &CS : CSInfo) {
       MachineInstr::MIFlag FrameSetupFlag =
           RVFI->hasEncMapFrameIndex() ? MachineInstr::FrameDestroy_EncMap : MachineInstr::FrameDestroy;
@@ -2418,7 +2509,19 @@ bool RISCVFrameLowering::restoreCalleeSavedRegisters(
     }
   };
   loadRegFromStackSlot(RVVCSI);
-  loadRegFromStackSlot(UnmanagedCSI);
+  if (UseXSigCalleeSave) {
+    int EncMapFI = RVFI->getEncMapFrameIndex();
+    MachineInstrBuilder MIB =
+        BuildMI(MBB, MI, DL, TII.get(RISCV::CALLEERESTORE))
+            .addImm(XSigSeq)
+            .addFrameIndex(EncMapFI)
+            .addImm(0)
+            .setMIFlag(MachineInstr::FrameDestroy);
+    addXSigSeqImplicitRegs(MIB, XSigSeq, /*IsRestore=*/true);
+  } else {
+    loadRegFromStackSlot(UnmanagedGPRCSI);
+  }
+  loadRegFromStackSlot(UnmanagedNonGPRCSI);
 
   if (RVFI->useQCIInterrupt(*MF)) {
     // Don't emit anything here because restoration is handled by
