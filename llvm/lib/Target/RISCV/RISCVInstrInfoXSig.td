@@ -76,34 +76,34 @@ def : InstAlias<"ss.encmap ${imm12}(${rs1})", (SS_ID X0, GPRMem:$rs1, simm12_lo:
 def : InstAlias<"ls.encmap ${imm12}(${rs1})", (LS_MAP X0, GPRMem:$rs1, simm12_lo:$imm12)>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 1 in
-def CALLEESAVE : XSigCalleeInstI<0b000, (ins uimm5:$seq, GPRMem:$rs1,
+def CALLEESAVE : XSigCalleeInstI<0b010, (ins uimm5:$seq, GPRMem:$rs1,
                                          simm12_lo:$imm12),
                                  "calleesave", "$seq, ${imm12}(${rs1})">,
                  Sched<[WriteSTD, ReadMemBase]>;
 
 let hasSideEffects = 1, mayLoad = 1, mayStore = 0 in
-def CALLEERESTORE : XSigCalleeInstI<0b001, (ins uimm5:$seq, GPRMem:$rs1,
+def CALLEERESTORE : XSigCalleeInstI<0b011, (ins uimm5:$seq, GPRMem:$rs1,
                                             simm12_lo:$imm12),
                                     "calleerestore",
                                     "$seq, ${imm12}(${rs1})">,
                     Sched<[WriteLDW, ReadMemBase]>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
-def SETDUMMYID : RVInstI<0b010, OPC_CUSTOM_2, (outs GPR:$rd),
-                     (ins GPR:$rs1, simm12_lo:$imm12),
-                     "setdummyid", "$rd, $rs1, $imm12">,
+def SETRAWID : RVInstR<0b0000000, 0b110, OPC_CUSTOM_2, (outs GPR:$rd),
+                     (ins GPR:$rs1, GPR:$rs2),
+                     "setrawid", "$rd, $rs1, $rs2">,
              Sched<[WriteIALU, ReadIALU]>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
-def SETRAWID : RVInstI<0b110, OPC_CUSTOM_2, (outs GPR:$rd),
-                     (ins GPR:$rs1, simm12_lo:$imm12),
-                     "setrawid", "$rd, $rs1, $imm12">,
+def SETDUMMYID : RVInstR<0b0000001, 0b110, OPC_CUSTOM_2, (outs GPR:$rd),
+                     (ins GPR:$rs1, GPR:$rs2),
+                     "setdummyid", "$rd, $rs1, $rs2">,
              Sched<[WriteIALU, ReadIALU]>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
-def SETNEWID : RVInstI<0b011, OPC_CUSTOM_2, (outs GPR:$rd),
-                       (ins GPR:$rs1, simm12_lo:$imm12),
-                       "setnewid", "$rd, $rs1, $imm12">,
+def SETNEWID : RVInstR<0b0000010, 0b110, OPC_CUSTOM_2, (outs GPR:$rd),
+                       (ins GPR:$rs1, GPR:$rs2),
+                       "setnewid", "$rd, $rs1, $rs2">,
                Sched<[WriteIALU, ReadIALU]>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
@@ -152,12 +152,12 @@ let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 1 i
 def PseudoLSA_TLS_IE : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), []>;
 
 // Define Pat
-def : Pat<(xsig_setnewid GPR:$rs1), (SETNEWID GPR:$rs1, 0)>;
-def : Pat<(xsig_setnewid (add GPR:$rs1, simm12_lo:$imm12)), (SETNEWID GPR:$rs1, simm12_lo:$imm12)>;
-def : Pat<(xsig_setdummyid GPR:$rs1), (SETDUMMYID GPR:$rs1, 0)>;
-def : Pat<(xsig_setdummyid (add GPR:$rs1, simm12_lo:$imm12)), (SETDUMMYID GPR:$rs1, simm12_lo:$imm12)>;
-def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, 0)>;
-def : Pat<(xsig_setrawid (add GPR:$rs1, simm12_lo:$imm12)), (SETRAWID GPR:$rs1, simm12_lo:$imm12)>;
+def : Pat<(xsig_setnewid GPR:$rs1), (SETNEWID GPR:$rs1, (XLenVT X0))>;
+def : Pat<(xsig_setnewid (add GPR:$rs1, GPR:$rs2)), (SETNEWID GPR:$rs1, GPR:$rs2)>;
+def : Pat<(xsig_setdummyid GPR:$rs1), (SETDUMMYID GPR:$rs1, (XLenVT X0))>;
+def : Pat<(xsig_setdummyid (add GPR:$rs1, GPR:$rs2)), (SETDUMMYID GPR:$rs1, GPR:$rs2)>;
+def : Pat<(xsig_setrawid GPR:$rs1), (SETRAWID GPR:$rs1, (XLenVT X0))>;
+def : Pat<(xsig_setrawid (add GPR:$rs1, GPR:$rs2)), (SETRAWID GPR:$rs1, GPR:$rs2)>;
 def : Pat<(riscv_rcall tglobaladdr:$func), (PseudoRCALL tglobaladdr:$func)>;
 def : Pat<(riscv_rcall texternalsym:$func), (PseudoRCALL texternalsym:$func)>;
 def : Pat<(riscv_rtail tglobaladdr:$func), (PseudoRTAIL tglobaladdr:$func)>;
