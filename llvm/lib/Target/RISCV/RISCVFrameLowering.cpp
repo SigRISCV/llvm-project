@@ -2077,6 +2077,15 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
 
   MachineFrameInfo &MFI = MF.getFrameInfo();
   const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
+  auto allocateSigModeSlot = [&](int &FrameIdx) {
+    const TargetRegisterClass &RC = RISCV::GPRRegClass;
+    unsigned Size = RegInfo->getSpillSize(RC);
+    Align Alignment = RegInfo->getSpillAlign(RC);
+    Alignment = std::min(Alignment, getStackAlign());
+    FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
+    MinCSFrameIndex = std::min<unsigned>(MinCSFrameIndex, FrameIdx);
+    MaxCSFrameIndex = std::max<unsigned>(MaxCSFrameIndex, FrameIdx);
+  };
 
   int GPRnum = 0;
   for (auto &CS : CSI) {
@@ -2092,6 +2101,9 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
     }
     GPRnum++;
   }
+
+  bool NeedsEncMapSlot = STI.isSigModeSupport() && GPRnum > 0;
+  bool EncMapAllocated = false;
 
   for (auto &CS : CSI) {
     MCRegister Reg = CS.getReg();
@@ -2135,6 +2147,14 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
       }
     }
 
+    if (NeedsEncMapSlot && !EncMapAllocated &&
+        !RISCV::GPRRegClass.contains(Reg)) {
+      int FrameIdx;
+      allocateSigModeSlot(FrameIdx);
+      RVFI->setEncMapFrameIndex(FrameIdx);
+      EncMapAllocated = true;
+    }
+
     // Not a fixed slot.
     Align Alignment = RegInfo->getSpillAlign(*RC);
     // We may not be able to satisfy the desired alignment specification of
@@ -2151,20 +2171,21 @@ bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
       MFI.setStackID(FrameIdx, TargetStackID::ScalableVector);
   }
 
-  // Allocate EncMapFrameIndex for SigMode after CSI loop to ensure it's in CSI range
+  if (NeedsEncMapSlot && !EncMapAllocated) {
+    int FrameIdx;
+    allocateSigModeSlot(FrameIdx);
+    RVFI->setEncMapFrameIndex(FrameIdx);
+    EncMapAllocated = true;
+  }
+
+  // Allocate SigMode-specific stack objects in the CSI range so they keep
+  // SP-relative addressing. Place EncMap after scalar GPR spills but before
+  // FPR/RVV spills when those are present.
   if (STI.isSigModeSupport()) {
     const TargetRegisterClass &RC = RISCV::GPRRegClass;
     unsigned Size = RegInfo->getSpillSize(RC);
     Align Alignment = RegInfo->getSpillAlign(RC);
     Alignment = std::min(Alignment, getStackAlign());
-    if (GPRnum > 0) {
-      int FrameIdx = MFI.CreateStackObject(Size, Alignment, true);
-      if ((unsigned)FrameIdx < MinCSFrameIndex)
-        MinCSFrameIndex = FrameIdx;
-      if ((unsigned)FrameIdx > MaxCSFrameIndex)
-        MaxCSFrameIndex = FrameIdx;
-      RVFI->setEncMapFrameIndex(FrameIdx);
-    }
     // Skip stack frame ID isolation for functions with incoming stack arguments
     // (FixedObjects) or varargs, because the caller writes arguments using
     // its ID while the callee would read with a different ID after setnewid.
