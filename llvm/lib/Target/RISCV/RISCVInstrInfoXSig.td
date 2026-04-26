@@ -33,6 +33,20 @@ def riscv_rtail     : RVSDNode<"RTAIL", SDT_RISCVCall,
                                [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                 SDNPVariadic]>;
 
+class XSigCalleeInstI<bits<3> funct3, dag ins, string opcodestr,
+                      string argstr>
+    : RVInst<(outs), ins, opcodestr, argstr, [], InstFormatI> {
+  bits<12> imm12;
+  bits<5> rs1;
+  bits<5> seq;
+
+  let Inst{31-20} = imm12;
+  let Inst{19-15} = rs1;
+  let Inst{14-12} = funct3;
+  let Inst{11-7} = seq;
+  let Inst{6-0} = OPC_CUSTOM_2.Value;
+}
+
 let Predicates = [HasVendorXSig] in {
 
 // Define Inst
@@ -60,6 +74,23 @@ def SS_ID : RVInstS<0b110, OPC_STORE, (outs),
 
 def : InstAlias<"ss.encmap ${imm12}(${rs1})", (SS_ID X0, GPRMem:$rs1, simm12_lo:$imm12)>;
 def : InstAlias<"ls.encmap ${imm12}(${rs1})", (LS_MAP X0, GPRMem:$rs1, simm12_lo:$imm12)>;
+
+let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in
+def CALLEESAVE : XSigCalleeInstI<0b000, (ins uimm5:$seq, GPRMem:$rs1,
+                                         simm12_lo:$imm12),
+                                 "calleesave", "$seq, ${imm12}(${rs1})">,
+                 Sched<[WriteSTD, ReadMemBase]> {
+  let Uses = [X1, X8, X9, X18, X19, X20, X21, X22, X23, X24, X25, X26, X27];
+}
+
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in
+def CALLEERESTORE : XSigCalleeInstI<0b001, (ins uimm5:$seq, GPRMem:$rs1,
+                                            simm12_lo:$imm12),
+                                    "calleerestore",
+                                    "$seq, ${imm12}(${rs1})">,
+                    Sched<[WriteLDW, ReadMemBase]> {
+  let Defs = [X1, X8, X9, X18, X19, X20, X21, X22, X23, X24, X25, X26, X27];
+}
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
 def SETDUMMYID : RVInstI<0b010, OPC_CUSTOM_2, (outs GPR:$rd),
