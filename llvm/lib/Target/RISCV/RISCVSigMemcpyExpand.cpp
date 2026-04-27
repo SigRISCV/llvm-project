@@ -1480,6 +1480,7 @@ bool RISCVSigMemcpyExpand::expandSigMemset(CallInst *II) {
 
 bool RISCVSigMemcpyExpand::runOnModule(Module &M) {
   // Check if we should run this pass
+  return false;
   auto &TPC = getAnalysis<TargetPassConfig>();
   const TargetMachine &TM = TPC.getTM<TargetMachine>();
   
